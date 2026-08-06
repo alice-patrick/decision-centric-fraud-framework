@@ -1,0 +1,22 @@
+project:
+  name: fraud-decision-system
+  random_seed: 42
+
+model:
+  registry_path: model_registry.json
+  active_model_key: active_model
+
+decisioning:
+  static_threshold: 0.50
+  alert_rate_low: 0.02
+  alert_rate_high: 0.10
+  cost_false_positive: 50.0
+  cost_false_negative_factor: 1.0
+  suppression_enabled: true
+  suppression_entity: nameDest
+  suppression_window_steps: 5
+
+logging:
+  predictions_log_path: predictions.log
+  alerts_log_path: alerts.log
+  system_log_path: system.log

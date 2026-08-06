@@ -1,0 +1,12 @@
+{
+  "active_model": "fraud_detection_model.pkl",
+  "models": {
+    "fraud_detection_model.pkl": {
+      "path": "models/fraud_detection_model.pkl",
+      "created_at": "2026-04-27",
+      "model_type": "Original_Working_Model",
+      "dataset": "PaySim",
+      "metrics": {}
+    }
+  }
+}
