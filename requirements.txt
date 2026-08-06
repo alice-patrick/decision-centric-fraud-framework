@@ -1,4 +1,9 @@
-streamlit
+fastapi
+uvicorn[standard]
 pandas
 numpy
-matplotlib
+scikit-learn
+joblib
+pydantic
+PyYAML
+requests
