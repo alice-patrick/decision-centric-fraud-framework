@@ -10,11 +10,14 @@ env/
 logs/
 *.log
 
+backups/
+
+.DS_Store
+desktop.ini
+
+# Ignore raw datasets
 data/raw/
 *.csv
 
+# Ignore trained models
 models/*.pkl
-
-backups/
-
-.DS_Storedesktop.ini
