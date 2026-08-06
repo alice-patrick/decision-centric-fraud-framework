@@ -15,9 +15,18 @@ backups/
 .DS_Store
 desktop.ini
 
-# Ignore raw datasets
+# Full local dataset stays private.
 data/raw/
+
+# Ignore CSV files by default.
 *.csv
 
-# Ignore trained models
+# Allow the smaller deployment dataset.
+!data/deployment/
+!data/deployment/paysim_deployment_sample.csv
+
+# Ignore trained models by default.
 models/*.pkl
+
+# Allow the active model required by Render.
+!models/fraud_detection_model.pkl

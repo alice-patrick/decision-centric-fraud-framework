@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -15,31 +18,76 @@ DATASET_COLUMNS = [
 ]
 
 
-def load_data(
-    project_root: Path,
-    limit: int = 10000,
-) -> pd.DataFrame:
+def resolve_dataset_path(project_root: Path) -> Path:
     """
-    Load and validate PaySim transactions.
-    """
-    if limit <= 0:
-        raise ValueError(
-            "limit must be greater than 0."
-        )
+    Resolve the dataset path for local and cloud execution.
 
-    dataset_path = (
+    Priority:
+    1. DATASET_PATH environment variable, when explicitly provided.
+    2. Full local PaySim dataset.
+    3. Smaller deployment dataset used by Render.
+    """
+    configured_path = os.getenv("DATASET_PATH")
+
+    if configured_path:
+        dataset_path = Path(configured_path)
+
+        if not dataset_path.is_absolute():
+            dataset_path = project_root / dataset_path
+
+        return dataset_path
+
+    local_dataset_path = (
         project_root
         / "data"
         / "raw"
         / "AIML Dataset.csv"
     )
 
-    if not dataset_path.exists():
-        raise FileNotFoundError(
-            f"Dataset not found: {dataset_path}"
+    deployment_dataset_path = (
+        project_root
+        / "data"
+        / "deployment"
+        / "paysim_deployment_sample.csv"
+    )
+
+    if local_dataset_path.exists():
+        return local_dataset_path
+
+    return deployment_dataset_path
+
+
+def load_data(
+    project_root: Path,
+    limit: int = 10000,
+) -> pd.DataFrame:
+    """
+    Load and validate PaySim transactions.
+
+    Locally, the full PaySim dataset is used when available.
+    In cloud deployment, the smaller deployment sample is used.
+    """
+    if limit <= 0:
+        raise ValueError(
+            "limit must be greater than 0."
         )
 
-    df = pd.read_csv(dataset_path).head(limit)
+    dataset_path = resolve_dataset_path(project_root)
+
+    if not dataset_path.exists():
+        raise FileNotFoundError(
+            "Dataset not found. Checked path: "
+            f"{dataset_path}. "
+            "Provide DATASET_PATH or add the deployment dataset."
+        )
+
+    # Read only the rows required by the selected experiment.
+    # This avoids loading the full six-million-row dataset into memory.
+    df = pd.read_csv(
+        dataset_path,
+        nrows=limit,
+        usecols=lambda column: column in DATASET_COLUMNS,
+    )
 
     missing_columns = [
         column
@@ -50,6 +98,12 @@ def load_data(
     if missing_columns:
         raise ValueError(
             f"Missing required columns: {missing_columns}"
+        )
+
+    if len(df) < limit:
+        raise ValueError(
+            f"The dataset contains only {len(df):,} rows, "
+            f"but the requested limit is {limit:,}."
         )
 
     df = df[DATASET_COLUMNS].copy()
