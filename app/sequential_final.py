@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
@@ -9,8 +10,12 @@ import pandas as pd
 import requests
 import streamlit as st
 
+API_BASE_URL = os.getenv(
+    "API_BASE_URL",
+    "http://127.0.0.1:8002",
+).rstrip("/")
 
-API_BASE_URL = "http://127.0.0.1:8002"
+
 SIMULATION_ENDPOINT = "simulation/sequential"
 
 
@@ -436,44 +441,89 @@ def load_data(params: dict[str, Any]) -> dict[str, Any]:
     return response.json()
 
 
-@st.cache_data(ttl=900, show_spinner=False)
-def run_sensitivity_sweep(
-    base_params: dict[str, Any],
-    parameter_name: str,
-    values: tuple[float, ...],
-) -> list[dict[str, Any]]:
-    """Run one-at-a-time sequential simulations for sensitivity analysis."""
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_sensitivity_data(base_params: dict[str, Any]) -> dict[str, Any]:
+    """Run all sensitivity experiments through one optimized API request."""
+    endpoint_params = {
+        "limit": int(base_params["limit"]),
+        "investigation_cost": float(base_params["investigation_cost"]),
+        "static_threshold": float(base_params["static_threshold"]),
+        "ranking_policy": str(base_params["ranking_policy"]),
+        "risk_zone_floor": float(base_params["risk_zone_floor"]),
+        "budget_multiplier": float(base_params["budget_multiplier"]),
+        "alert_budget_per_step": int(base_params["alert_budget_per_step"]),
+        "suppression_window": int(base_params["suppression_window"]),
+        "monitoring_window_size": int(base_params["monitoring_window_size"]),
+    }
 
-    def run_one(value: float) -> dict[str, Any]:
-        experiment_params = dict(base_params)
-        if parameter_name in {"alert_budget_per_step", "suppression_window"}:
-            experiment_params[parameter_name] = int(value)
+    response = requests.get(
+        f"{API_BASE_URL}/simulation/sensitivity",
+        params=endpoint_params,
+        timeout=900,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def prepare_sensitivity_results(
+    payload: dict[str, Any],
+) -> dict[str, list[dict[str, Any]]]:
+    """Convert the optimized endpoint response to the dashboard's display format."""
+    grouped: dict[str, list[dict[str, Any]]] = {}
+
+    for row in payload.get("results", []):
+        # The UX evaluation reports transaction-volume scenarios up to 10,000
+        # transactions. Ignore any larger legacy result returned by the backend.
+        if (
+            str(row.get("experiment", "")) == "Transaction volume"
+            and n(row.get("tested_value")) > 10000
+        ):
+            continue
+
+        static_recall = n(row.get("static_recall"))
+        adaptive_recall = n(row.get("adaptive_recall"))
+        static_cost = n(row.get("static_operational_cost"))
+        adaptive_cost = n(row.get("adaptive_operational_cost"))
+
+        # Preserve the dashboard's existing, easy-to-explain comparison rule.
+        if adaptive_recall > static_recall + 1e-9:
+            winner = "Adaptive"
+        elif static_recall > adaptive_recall + 1e-9:
+            winner = "Static"
+        elif adaptive_cost < static_cost - 0.01:
+            winner = "Adaptive"
+        elif static_cost < adaptive_cost - 0.01:
+            winner = "Static"
         else:
-            experiment_params[parameter_name] = float(value)
+            winner = "Tie"
 
-        payload = load_data(experiment_params)
-        summary = get_summary(payload, "adaptive_sequential")
+        experiment_name = str(row.get("experiment", "Unknown experiment"))
+        grouped.setdefault(experiment_name, []).append(
+            {
+                "experiment": experiment_name,
+                "parameter": row.get("api_parameter"),
+                "value": row.get("tested_value"),
+                "static_recall": static_recall,
+                "adaptive_recall": adaptive_recall,
+                "recall_difference": adaptive_recall - static_recall,
+                "static_cost": static_cost,
+                "adaptive_cost": adaptive_cost,
+                "adaptive_cost_saving": static_cost - adaptive_cost,
+                "static_investigated": i(row.get("static_selected_alerts")),
+                "adaptive_investigated": i(row.get("adaptive_selected_alerts")),
+                "static_detected": i(row.get("static_frauds_detected")),
+                "adaptive_detected": i(row.get("adaptive_frauds_detected")),
+                "static_overflow": i(row.get("static_capacity_rejected_alerts")),
+                "adaptive_overflow": i(row.get("adaptive_capacity_rejected_alerts")),
+                "adaptive_suppressed": i(row.get("adaptive_suppressed_alerts")),
+                "winner": winner,
+            }
+        )
 
-        return {
-            "parameter": parameter_name,
-            "value": value,
-            "candidate_alerts": i(summary.get("policy_candidate_alerts")),
-            "investigated_alerts": i(summary.get("selected_alerts")),
-            "suppressed_alerts": i(summary.get("suppressed_alerts")),
-            "budget_overflow": i(summary.get("capacity_rejected_alerts")),
-            "frauds_detected": i(summary.get("frauds_detected")),
-            "recall": n(summary.get("recall")),
-            "precision": n(summary.get("precision")),
-            "operational_cost": n(summary.get("total_operational_cost")),
-        }
+    for rows in grouped.values():
+        rows.sort(key=lambda item: float(item["value"]))
 
-    rows: list[dict[str, Any]] = []
-    with ThreadPoolExecutor(max_workers=min(4, len(values))) as executor:
-        futures = {executor.submit(run_one, value): value for value in values}
-        for future in as_completed(futures):
-            rows.append(future.result())
-
-    return sorted(rows, key=lambda row: float(row["value"]))
+    return grouped
 
 
 # =========================================================
@@ -508,7 +558,7 @@ with st.sidebar.expander(
 ):
     transaction_limit = st.selectbox(
         "Transactions evaluated",
-        [1000, 3000, 10000, 50000],
+        [1000, 3000, 10000],
         index=2,
         help=(
             "How many transactions are included in the current simulation."
@@ -516,14 +566,15 @@ with st.sidebar.expander(
     )
 
     alert_budget_per_step = st.number_input(
-        "Alerts allowed per operational step",
+        "Analyst capacity (alerts per operational step)",
         min_value=1,
         max_value=5000,
         value=50,
         step=5,
         help=(
-            "Maximum number of cases analysts can review during each "
-            "simulation decision window."
+            "Maximum number of alerts that can enter human investigation in each "
+            "operational step. Increase or decrease this value to test how analyst "
+            "resources affect overflow, workload and fraud coverage."
         ),
     )
 
@@ -544,11 +595,11 @@ with st.sidebar.expander(
     expanded=False,
 ):
     investigation_cost = st.number_input(
-        "Cost per investigation",
+        "Assumed cost per investigation (€)",
         min_value=0.0,
         value=10.0,
         step=1.0,
-        help="Assumed cost of reviewing one alert.",
+        help="Experimental assumption: estimated cost assigned to reviewing one alert. This is not an observed banking cost.",
     )
 
     static_threshold = st.slider(
@@ -762,9 +813,23 @@ with executive_tab:
     adaptive_batch_alerts = i(adaptive_batch.get("selected_alerts"))
     adaptive_investigated_alerts = i(adaptive_seq.get("selected_alerts"))
 
+    # Cost transparency: keep the existing backend methodology, but expose its
+    # components so users can see exactly what the simulation estimate means.
+    static_seq_investigation_cost = n(static_seq.get("investigation_cost_total"))
+    adaptive_seq_investigation_cost = n(adaptive_seq.get("investigation_cost_total"))
+    static_seq_missed_fraud_cost = n(static_seq.get("missed_fraud_cost"))
+    adaptive_seq_missed_fraud_cost = n(adaptive_seq.get("missed_fraud_cost"))
+    static_seq_missed_frauds = i(static_seq.get("frauds_missed"))
+    adaptive_seq_missed_frauds = i(adaptive_seq.get("frauds_missed"))
+    static_seq_total_cost = n(static_seq.get("total_operational_cost"))
+    adaptive_seq_total_cost = n(adaptive_seq.get("total_operational_cost"))
+    sequential_cost_saving = static_seq_total_cost - adaptive_seq_total_cost
+
     st.markdown("### Experiment overview")
 
-    k1, k2, k3, k4, k5 = st.columns(5)
+    # Keep the executive layer deliberately compact: three KPIs only.
+    # Alert-volume details remain available in the exact-results table below.
+    k1, k2, k3 = st.columns(3)
 
     with k1:
         metric_card(
@@ -778,7 +843,7 @@ with executive_tab:
         metric_card(
             "Static frauds detected",
             f"{static_batch_frauds} → {static_seq_frauds}",
-            "Batch result followed by Sequential result.",
+            "Batch result → Sequential result.",
             "orange",
         )
 
@@ -786,24 +851,8 @@ with executive_tab:
         metric_card(
             "Adaptive frauds detected",
             f"{adaptive_batch_frauds} → {adaptive_seq_frauds}",
-            "Batch result followed by Sequential result.",
+            "Batch result → Sequential result.",
             "green",
-        )
-
-    with k4:
-        metric_card(
-            "Static alerts selected",
-            f"{static_batch_alerts:,} → {static_investigated_alerts:,}",
-            "Batch alerts followed by alerts investigated in Sequential replay.",
-            "orange",
-        )
-
-    with k5:
-        metric_card(
-            "Adaptive alerts selected",
-            f"{adaptive_batch_alerts:,} → {adaptive_investigated_alerts:,}",
-            "Batch alerts followed by alerts investigated in Sequential replay.",
-            "blue",
         )
 
     st.markdown("### Main comparison")
@@ -850,6 +899,13 @@ with executive_tab:
 
     st.markdown("### Exact results")
 
+    st.info(
+        "Cost values shown in this dashboard are simulated estimates, not observed "
+        "banking losses. Estimated operational cost combines the configured "
+        "investigation cost with the estimated cost assigned to missed fraud cases. "
+        "All monetary values are displayed in euros (€)."
+    )
+
     comparison_table = pd.DataFrame(
         [
             {
@@ -859,7 +915,7 @@ with executive_tab:
                 "Frauds missed": i(static_batch.get("frauds_missed")),
                 "Precision": n(static_batch.get("precision")),
                 "Recall": n(static_batch.get("recall")),
-                "Operational cost": n(
+                "Estimated operational cost (€)": n(
                     static_batch.get("total_operational_cost")
                 ),
             },
@@ -870,7 +926,7 @@ with executive_tab:
                 "Frauds missed": i(adaptive_batch.get("frauds_missed")),
                 "Precision": n(adaptive_batch.get("precision")),
                 "Recall": n(adaptive_batch.get("recall")),
-                "Operational cost": n(
+                "Estimated operational cost (€)": n(
                     adaptive_batch.get("total_operational_cost")
                 ),
             },
@@ -881,7 +937,7 @@ with executive_tab:
                 "Frauds missed": i(static_seq.get("frauds_missed")),
                 "Precision": n(static_seq.get("precision")),
                 "Recall": n(static_seq.get("recall")),
-                "Operational cost": n(
+                "Estimated operational cost (€)": n(
                     static_seq.get("total_operational_cost")
                 ),
             },
@@ -892,7 +948,7 @@ with executive_tab:
                 "Frauds missed": i(adaptive_seq.get("frauds_missed")),
                 "Precision": n(adaptive_seq.get("precision")),
                 "Recall": n(adaptive_seq.get("recall")),
-                "Operational cost": n(
+                "Estimated operational cost (€)": n(
                     adaptive_seq.get("total_operational_cost")
                 ),
             },
@@ -902,8 +958,8 @@ with executive_tab:
     comparison_display = comparison_table.copy()
     comparison_display["Precision"] = comparison_display["Precision"].map(pct)
     comparison_display["Recall"] = comparison_display["Recall"].map(pct)
-    comparison_display["Operational cost"] = (
-        comparison_display["Operational cost"].map(money)
+    comparison_display["Estimated operational cost (€)"] = (
+        comparison_display["Estimated operational cost (€)"].map(money)
     )
 
     table_col, table_note_col = st.columns([2.25, 1])
@@ -937,6 +993,116 @@ with executive_tab:
             """,
             unsafe_allow_html=True,
         )
+
+    st.markdown("### Cost impact in the Sequential simulation")
+
+    cost_kpi_col, cost_explanation_col = st.columns([1, 2.25])
+    with cost_kpi_col:
+        if sequential_cost_saving >= 0:
+            metric_card(
+                "Estimated cost avoided by Adaptive",
+                money(sequential_cost_saving),
+                "Static estimated cost minus Adaptive estimated cost in the Sequential replay.",
+                "green",
+            )
+        else:
+            metric_card(
+                "Estimated additional cost of Adaptive",
+                money(abs(sequential_cost_saving)),
+                "Adaptive estimated cost minus Static estimated cost in the Sequential replay.",
+                "orange",
+            )
+
+    with cost_explanation_col:
+        st.markdown(
+            f"""
+            <div class="question-card">
+                <strong>What do these euro amounts mean?</strong><br>
+                They are <strong>simulation-based estimates</strong>, not observed bank losses.
+                For each policy, estimated operational cost is the sum of the cost of
+                investigated alerts and the transaction amounts of fraud cases that were
+                missed under the current simulation assumptions. The current assumed review
+                cost is <strong>{money(investigation_cost)}</strong> per investigated alert.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("### How is estimated operational cost calculated?")
+
+    st.markdown(
+        f"""
+        <div class="question-card">
+            <strong>Formula used in this simulation</strong><br><br>
+            <strong>Estimated operational cost</strong> = investigation cost + estimated value of missed fraud<br>
+            <strong>Investigation cost</strong> = investigated alerts × assumed review cost
+            ({money(investigation_cost)} per alert)<br>
+            <strong>Estimated value of missed fraud</strong> = sum of the <code>amount</code> values
+            of fraud transactions that were missed.<br><br>
+            The transaction amount is used as a <strong>proxy for direct financial loss</strong>.
+            These are experimental simulation estimates, not observed bank accounting losses.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    cost_breakdown = pd.DataFrame(
+        [
+            {
+                "Policy": "Static Sequential",
+                "Missed fraud cases": static_seq_missed_frauds,
+                "Estimated value of missed fraud (€)": static_seq_missed_fraud_cost,
+                "Investigated alerts": static_investigated_alerts,
+                "Investigation cost (€)": static_seq_investigation_cost,
+                "Total estimated operational cost (€)": static_seq_total_cost,
+            },
+            {
+                "Policy": "Adaptive Sequential",
+                "Missed fraud cases": adaptive_seq_missed_frauds,
+                "Estimated value of missed fraud (€)": adaptive_seq_missed_fraud_cost,
+                "Investigated alerts": adaptive_investigated_alerts,
+                "Investigation cost (€)": adaptive_seq_investigation_cost,
+                "Total estimated operational cost (€)": adaptive_seq_total_cost,
+            },
+        ]
+    )
+
+    cost_breakdown_display = cost_breakdown.copy()
+    for cost_column in [
+        "Estimated value of missed fraud (€)",
+        "Investigation cost (€)",
+        "Total estimated operational cost (€)",
+    ]:
+        cost_breakdown_display[cost_column] = (
+            cost_breakdown_display[cost_column].map(money)
+        )
+
+    st.dataframe(
+        cost_breakdown_display,
+        width="stretch",
+        hide_index=True,
+    )
+
+    st.markdown(
+        f"""
+        <div class="takeaway">
+            <strong>Worked example from the current simulation</strong><br><br>
+            <strong>Static:</strong> {static_investigated_alerts:,} investigated alerts ×
+            {money(investigation_cost)} = {money(static_seq_investigation_cost)} investigation cost.
+            The {static_seq_missed_frauds:,} missed fraud cases have a combined transaction value of
+            {money(static_seq_missed_fraud_cost)}. Therefore, estimated operational cost =
+            {money(static_seq_investigation_cost)} + {money(static_seq_missed_fraud_cost)} =
+            <strong>{money(static_seq_total_cost)}</strong>.<br><br>
+            <strong>Adaptive:</strong> {adaptive_investigated_alerts:,} investigated alerts ×
+            {money(investigation_cost)} = {money(adaptive_seq_investigation_cost)} investigation cost.
+            The {adaptive_seq_missed_frauds:,} missed fraud cases have a combined transaction value of
+            {money(adaptive_seq_missed_fraud_cost)}. Therefore, estimated operational cost =
+            {money(adaptive_seq_investigation_cost)} + {money(adaptive_seq_missed_fraud_cost)} =
+            <strong>{money(adaptive_seq_total_cost)}</strong>.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     st.markdown("### Batch versus Sequential performance")
 
@@ -1036,22 +1202,18 @@ with executive_tab:
             ),
         )
 
-    sequential_cost_saving = (n(static_seq.get("total_operational_cost"))
-        - n(adaptive_seq.get("total_operational_cost"))
-    )
-
     if sequential_cost_saving > 0:
         cost_phrase = (
-            f"and lowers total operational cost by "
+            f"and lowers estimated operational cost by "
             f"{money(sequential_cost_saving)}"
         )
     elif sequential_cost_saving < 0:
         cost_phrase = (
-            f"but increases total operational cost by "
+            f"but increases estimated operational cost by "
             f"{money(abs(sequential_cost_saving))}"
         )
     else:
-        cost_phrase = "with no change in total operational cost"
+        cost_phrase = "with no change in estimated operational cost"
 
     st.markdown(
         f"""
@@ -1070,12 +1232,12 @@ with executive_tab:
     if sequential_recall_gain > 0 and sequential_cost_saving > 0:
         recommendation = (
             "Adaptive is preferred under the current configuration because it "
-            "combines higher Sequential recall with lower operational cost."
+            "combines higher Sequential recall with lower estimated operational cost."
         )
     elif sequential_recall_gain > 0:
         recommendation = (
             "Adaptive improves fraud coverage, but management should review the "
-            "additional cost and workload before selecting it."
+            "additional estimated cost and workload before selecting it."
         )
     elif sequential_recall_gain < 0:
         recommendation = (
@@ -1084,7 +1246,7 @@ with executive_tab:
         )
     else:
         recommendation = (
-            "The policies provide equal Sequential recall. Prefer the lower-cost "
+            "The policies provide equal Sequential recall. Prefer the lower estimated-cost "
             "or simpler option unless another operational objective justifies Adaptive."
         )
 
@@ -1141,8 +1303,16 @@ with executive_tab:
             statistics. It is separate from an operational step and does not control
             analyst-capacity resets.
 
-            **Operational cost:** investigation cost plus the estimated cost of fraud
-            cases that were missed.
+            **Estimated operational cost:** a simulation-based measure equal to the
+            investigation cost plus the estimated missed-fraud loss. Investigation cost is
+            calculated as investigated alerts × assumed cost per investigation. In the current
+            implementation, missed-fraud loss is based on the transaction amounts of fraud
+            cases that were not detected. It is an experimental decision-support measure, not
+            an observed bank accounting figure.
+
+            **Estimated cost avoided by Adaptive:** Static Sequential estimated operational
+            cost minus Adaptive Sequential estimated operational cost. A positive value means
+            Adaptive produces the lower simulated cost under the current assumptions.
 
             **Operational step:** one chronological decision cycle of the sequential
             replay. Suppression, ranking and analyst capacity are applied independently
@@ -1198,8 +1368,25 @@ with executive_tab:
         )
 
     with st.expander("Technical details"):
+        st.markdown("#### Experimental dataset")
+        st.markdown(
+            """
+            **Dataset:** PaySim synthetic payment transaction dataset  \n            **Evaluation mode:** Offline historical replay  \n            **Processing:** Chronological sequential simulation using the dataset's `step` variable  \n            **Purpose:** Evaluation of fraud-detection and operational decision-making strategies under controlled experimental conditions  \n            **Environment:** Research prototype; the results do not originate from a live banking production system
+
+            All experiments presented in this dashboard use PaySim transactions.
+            The same experimental dataset and baseline configuration are used across
+            policy comparisons unless a sensitivity experiment explicitly changes the
+            transaction volume or another operating parameter.
+            """
+        )
+
+        st.divider()
+        st.markdown("#### Current result summary")
         st.json(
             {
+                "dataset": "PaySim",
+                "evaluation_mode": "offline chronological replay",
+                "environment": "research prototype",
                 "total_frauds": total_frauds,
                 "static_batch_frauds": static_batch_frauds,
                 "adaptive_batch_frauds": adaptive_batch_frauds,
@@ -1220,6 +1407,12 @@ with capacity_tab:
     st.caption(
         "Select a policy to see how the same analyst-capacity constraint "
         "affects its candidate alerts and investigation queue."
+    )
+
+    st.info(
+        f"Current analyst capacity: {int(alert_budget_per_step)} alerts per operational step. "
+        "You can change this directly from Main controls in the left sidebar to test "
+        "how more or fewer analyst resources affect the queue."
     )
 
     policy_choice = st.radio(
@@ -1263,38 +1456,30 @@ with capacity_tab:
 
     budget_overflow = rejected
 
-    # Results first.
-    k1, k2, k3, k4 = st.columns(4)
+    # Keep only the three outcome KPIs here. Candidate volume is shown in the funnel below.
+    k1, k2, k3 = st.columns(3)
 
     with k1:
         metric_card(
-            "Candidate alerts",
-            f"{candidates:,}",
-            f"Initially proposed by the {policy_choice} policy.",
-            "blue",
+            "Investigated alerts",
+            f"{accepted:,}",
+            "Alerts that actually entered the analyst queue.",
+            "green",
         )
 
     with k2:
         metric_card(
-            "Investigated alerts",
-            f"{accepted:,}",
-            "Actually entered the analyst queue.",
-            "green",
+            "Suppressed alerts",
+            f"{suppressed:,}",
+            "Repeated alerts filtered before capacity was applied.",
+            "orange",
         )
 
     with k3:
         metric_card(
-            "Suppressed alerts",
-            f"{suppressed:,}",
-            "Filtered as repeated entity alerts.",
-            "orange",
-        )
-
-    with k4:
-        metric_card(
-             "Budget overflow",
+             "Capacity-rejected alerts",
              f"{rejected:,}",
-             "Candidate alerts that could not be investigated because the analyst budget was exhausted.",
+             "Eligible alerts that could not be investigated because analyst capacity was exhausted.",
              "red",
         )
 
@@ -1530,18 +1715,22 @@ with capacity_tab:
         else:
             step_frame = step_frame.sort_values("step").reset_index(drop=True)
 
-            # Keep the visible table focused on the six values needed to
-            # explain how the per-step analyst limit produced the final result.
+            # Show both the per-step analyst limit and any capacity that remained
+            # unused. This makes it clear that a value such as 49 investigated
+            # alerts with a capacity of 50 does not mean that one alert was lost;
+            # it means that only 49 eligible alerts were available in that step.
             step_breakdown = pd.DataFrame(
                 {
                     "Step": step_frame["step"].map(i),
                     "Candidate": step_frame["candidate_alerts"].map(i),
                     "Suppressed": step_frame["suppressed_alerts"].map(i),
                     "Eligible": step_frame["eligible_alerts"].map(i),
+                    "Capacity": int(alert_budget_per_step),
                     "Investigated": step_frame["investigated_alerts"].map(i),
                     "Overflow": step_frame[
                         "capacity_rejected_alerts"
                     ].map(i),
+                    "Unused capacity": step_frame["unused_capacity"].map(i),
                 }
             )
 
@@ -1552,10 +1741,14 @@ with capacity_tab:
                         "Candidate": int(step_breakdown["Candidate"].sum()),
                         "Suppressed": int(step_breakdown["Suppressed"].sum()),
                         "Eligible": int(step_breakdown["Eligible"].sum()),
+                        "Capacity": int(step_breakdown["Capacity"].sum()),
                         "Investigated": int(
                             step_breakdown["Investigated"].sum()
                         ),
                         "Overflow": int(step_breakdown["Overflow"].sum()),
+                        "Unused capacity": int(
+                            step_breakdown["Unused capacity"].sum()
+                        ),
                     }
                 ]
             )
@@ -1568,6 +1761,13 @@ with capacity_tab:
                 step_breakdown,
                 width="stretch",
                 hide_index=True,
+            )
+
+            st.caption(
+                "Unused capacity is the number of analyst investigation slots that "
+                "remained empty because fewer eligible alerts were available in that "
+                "operational step. It does not represent a lost alert or a missed "
+                "transaction, and unused capacity is not carried forward to later steps."
             )
 
             # Use the API fields, rather than the displayed totals row, to
@@ -1979,7 +2179,7 @@ with monitoring_tab:
                 "capacity_rejected": "Budget overflow",
                 "frauds_missed": "Frauds missed",
                 "recall": "Recall",
-                "operational_cost": "Operational cost",
+                "operational_cost": "Estimated operational cost (€)",
             }
         )
 
@@ -1995,7 +2195,7 @@ with monitoring_tab:
             <div class="takeaway">
                 <strong>How to read the table</strong><br>
                 Each row is one consecutive transaction window. Compare rows to identify
-                workload peaks, missed fraud and changes in operational cost.
+                workload peaks, missed fraud and changes in estimated operational cost.
             </div>
             """,
             unsafe_allow_html=True,
@@ -2190,8 +2390,8 @@ with monitoring_tab:
 
         render_monitoring_chart(
             column="operational_cost",
-            title="Operational Cost per Monitoring Window",
-            y_axis_label="Operational Cost (€)",
+            title="Estimated Operational Cost per Monitoring Window",
+            y_axis_label="Estimated Operational Cost (€)",
             value_formatter=lambda value: f"€{value:,.2f}",
             interpretation=(
                 "This chart combines investigation workload with the cost assigned "
@@ -2272,7 +2472,7 @@ with monitoring_tab:
                 Highest candidate workload: <strong>{candidate_peak_text}</strong>.<br>
                 Largest budget overflow: <strong>{rejected_peak_text}</strong>.<br>
                 Most missed fraud: <strong>{missed_peak_text}</strong>.<br>
-                Highest operational cost: <strong>{cost_peak_text}</strong>.<br><br>
+                Highest estimated operational cost: <strong>{cost_peak_text}</strong>.<br><br>
                 {html.escape(stability_text)}
             </div>
             """,
@@ -2319,8 +2519,8 @@ with sensitivity_tab:
     experiment_definitions = {
         "Transaction volume": {
             "parameter": "limit",
-            "values": (1000.0, 3000.0, 10000.0, 50000.0),
-            "display_values": "1,000 · 3,000 · 10,000 · 50,000 transactions",
+            "values": (1000.0, 3000.0, 10000.0),
+            "display_values": "1,000 · 3,000 · 10,000 transactions",
             "purpose": "Tests how the system behaves as the transaction workload grows while analyst resources remain fixed.",
         },
         "Analyst capacity": {
@@ -2381,8 +2581,8 @@ with sensitivity_tab:
                 )
 
     st.caption(
-        "Running all experiments sends multiple requests to the sequential-simulation API. "
-        "The first run may therefore take a few minutes; completed results are cached."
+        "All experiments are now executed through one optimized API request. "
+        "The backend reuses scored data and repeated calculations, and completed results are cached."
     )
 
     run_sensitivity = st.button(
@@ -2392,79 +2592,41 @@ with sensitivity_tab:
     )
 
     if run_sensitivity:
-        results: dict[str, list[dict[str, Any]]] = {}
         try:
-            with st.spinner("Running seven one-at-a-time parameter experiments..."):
-                for experiment_name, definition in experiment_definitions.items():
-                    parameter_name = str(definition["parameter"])
-                    values = tuple(definition["values"])
+            with st.spinner(
+                "Running seven one-at-a-time experiments through the optimized sensitivity endpoint..."
+            ):
+                sensitivity_payload = load_sensitivity_data(dict(params))
+                results = prepare_sensitivity_results(sensitivity_payload)
 
-                    def run_one(value: float) -> dict[str, Any]:
-                        experiment_params = dict(params)
-                        if parameter_name in {
-                            "limit",
-                            "alert_budget_per_step",
-                            "suppression_window",
-                        }:
-                            experiment_params[parameter_name] = int(value)
-                        else:
-                            experiment_params[parameter_name] = float(value)
-
-                        payload = load_data(experiment_params)
-                        static_summary = get_summary(payload, "static_sequential")
-                        adaptive_summary = get_summary(payload, "adaptive_sequential")
-
-                        static_recall = n(static_summary.get("recall"))
-                        adaptive_recall = n(adaptive_summary.get("recall"))
-                        static_cost = n(static_summary.get("total_operational_cost"))
-                        adaptive_cost = n(adaptive_summary.get("total_operational_cost"))
-
-                        recall_tolerance = 1e-9
-                        cost_tolerance = 0.01
-                        if adaptive_recall > static_recall + recall_tolerance:
-                            winner = "Adaptive"
-                        elif static_recall > adaptive_recall + recall_tolerance:
-                            winner = "Static"
-                        elif adaptive_cost < static_cost - cost_tolerance:
-                            winner = "Adaptive"
-                        elif static_cost < adaptive_cost - cost_tolerance:
-                            winner = "Static"
-                        else:
-                            winner = "Tie"
-
-                        return {
-                            "experiment": experiment_name,
-                            "parameter": parameter_name,
-                            "value": value,
-                            "static_recall": static_recall,
-                            "adaptive_recall": adaptive_recall,
-                            "recall_difference": adaptive_recall - static_recall,
-                            "static_cost": static_cost,
-                            "adaptive_cost": adaptive_cost,
-                            "adaptive_cost_saving": static_cost - adaptive_cost,
-                            "static_investigated": i(static_summary.get("selected_alerts")),
-                            "adaptive_investigated": i(adaptive_summary.get("selected_alerts")),
-                            "static_detected": i(static_summary.get("frauds_detected")),
-                            "adaptive_detected": i(adaptive_summary.get("frauds_detected")),
-                            "static_overflow": i(static_summary.get("capacity_rejected_alerts")),
-                            "adaptive_overflow": i(adaptive_summary.get("capacity_rejected_alerts")),
-                            "adaptive_suppressed": i(adaptive_summary.get("suppressed_alerts")),
-                            "winner": winner,
-                        }
-
-                    rows: list[dict[str, Any]] = []
-                    with ThreadPoolExecutor(max_workers=min(4, len(values))) as executor:
-                        futures = [executor.submit(run_one, value) for value in values]
-                        for future in as_completed(futures):
-                            rows.append(future.result())
-                    results[experiment_name] = sorted(rows, key=lambda row: float(row["value"]))
+            missing_experiments = [
+                name for name in experiment_names if name not in results
+            ]
+            if missing_experiments:
+                raise ValueError(
+                    "The sensitivity endpoint did not return results for: "
+                    + ", ".join(missing_experiments)
+                )
 
             st.session_state["final_sensitivity_results"] = {
                 "results": results,
                 "base_params": dict(params),
+                "execution_metadata": sensitivity_payload.get(
+                    "execution_metadata", {}
+                ),
             }
+            st.success(
+                "Sensitivity experiments completed through one API request."
+            )
+        except requests.exceptions.Timeout:
+            st.error(
+                "The optimized sensitivity request timed out. Try a smaller baseline "
+                "transaction volume or check the FastAPI terminal."
+            )
         except requests.exceptions.RequestException as exc:
-            st.error("One of the sensitivity experiments failed because the API request was unsuccessful.")
+            st.error(
+                "The sensitivity endpoint could not complete the experiments."
+            )
             st.exception(exc)
         except Exception as exc:
             st.error("The sensitivity analysis could not be completed.")
@@ -2502,6 +2664,271 @@ with sensitivity_tab:
                 return f"Static was preferable in {static_wins} of {total} tested settings; Adaptive won {adaptive_wins}, with {ties} ties."
             return f"Neither policy dominated: each won {adaptive_wins} settings, with {ties} ties."
 
+        # Build a concise, data-driven overview before the detailed results.
+        overview_frames: dict[str, pd.DataFrame] = {
+            experiment_name: pd.DataFrame(result_map[experiment_name])
+            for experiment_name in experiment_names
+        }
+
+        overview_family_winners: list[str] = []
+        for experiment_name in experiment_names:
+            overview_frame = overview_frames[experiment_name]
+            overview_counts = overview_frame["winner"].value_counts()
+            overview_adaptive = int(overview_counts.get("Adaptive", 0))
+            overview_static = int(overview_counts.get("Static", 0))
+            if overview_adaptive > overview_static:
+                overview_family_winners.append("Adaptive")
+            elif overview_static > overview_adaptive:
+                overview_family_winners.append("Static")
+            else:
+                overview_family_winners.append("Tie")
+
+        overview_adaptive_families = overview_family_winners.count("Adaptive")
+        overview_static_families = overview_family_winners.count("Static")
+        overview_tied_families = overview_family_winners.count("Tie")
+
+        largest_gap_experiment = "Not available"
+        largest_gap_value = 0.0
+        largest_gap_setting: float | None = None
+        for experiment_name, overview_frame in overview_frames.items():
+            if overview_frame.empty or "recall_difference" not in overview_frame.columns:
+                continue
+            absolute_gap = pd.to_numeric(
+                overview_frame["recall_difference"], errors="coerce"
+            ).abs()
+            if absolute_gap.dropna().empty:
+                continue
+            row_index = absolute_gap.idxmax()
+            current_gap = float(absolute_gap.loc[row_index])
+            if current_gap > largest_gap_value:
+                largest_gap_value = current_gap
+                largest_gap_experiment = experiment_name
+                largest_gap_setting = n(overview_frame.loc[row_index, "value"])
+
+        if overview_adaptive_families > overview_static_families:
+            overall_direction = (
+                "Adaptive produced the stronger overall pattern across the tested "
+                "parameter families, although it was not superior in every setting."
+            )
+        elif overview_static_families > overview_adaptive_families:
+            overall_direction = (
+                "Static produced the stronger overall pattern across the tested "
+                "parameter families, so Adaptive superiority is not supported universally."
+            )
+        else:
+            overall_direction = (
+                "Neither policy dominated across the tested parameter families; "
+                "the preferred choice depends on the operating configuration."
+            )
+
+        gap_detail = (
+            f"{largest_gap_experiment} at tested value {largest_gap_setting:g}, "
+            f"where the absolute recall difference reached {largest_gap_value:.2%}."
+            if largest_gap_setting is not None
+            else "No measurable recall separation was available."
+        )
+
+        st.markdown("### Executive findings")
+
+        st.markdown(
+            """
+            <div class="info-box">
+                <strong>Purpose of these checks</strong><br>
+                Seven experiments were performed to see whether the decision layer still
+                behaves clearly when its operating conditions change. In each experiment,
+                only <strong>one parameter</strong> was modified and all other settings were
+                kept unchanged. This allows the effect of each parameter to be examined
+                separately.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        baseline_params = saved_analysis.get("base_params", params)
+
+        st.markdown("### Controlled experimental design")
+        st.markdown(
+            """
+            <div class="question-card">
+                To make each comparison fair, every experiment changed only the parameter
+                named in that experiment. The remaining settings stayed at the baseline
+                values shown below. For example, during the Analyst capacity experiment,
+                analyst capacity changed while transaction volume, thresholds, costs,
+                suppression and the Adaptive budget multiplier remained fixed.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        baseline_configuration = pd.DataFrame(
+            [
+                {
+                    "Setting": "Transactions evaluated",
+                    "Baseline value": f"{int(baseline_params.get('limit', transaction_limit)):,}",
+                },
+                {
+                    "Setting": "Analyst capacity",
+                    "Baseline value": (
+                        f"{int(baseline_params.get('alert_budget_per_step', alert_budget_per_step))} "
+                        "alerts per operational step"
+                    ),
+                },
+                {
+                    "Setting": "Investigation cost",
+                    "Baseline value": (
+                        f"€{float(baseline_params.get('investigation_cost', investigation_cost)):,.2f} "
+                        "per investigation"
+                    ),
+                },
+                {
+                    "Setting": "Static fraud threshold",
+                    "Baseline value": (
+                        f"{float(baseline_params.get('static_threshold', static_threshold)):.2f}"
+                    ),
+                },
+                {
+                    "Setting": "Minimum Adaptive fraud threshold",
+                    "Baseline value": (
+                        f"{float(baseline_params.get('risk_zone_floor', risk_zone_floor)):.2f}"
+                    ),
+                },
+                {
+                    "Setting": "Adaptive budget multiplier",
+                    "Baseline value": (
+                        f"{float(baseline_params.get('budget_multiplier', budget_multiplier)):.2f}"
+                    ),
+                },
+                {
+                    "Setting": "Suppression window",
+                    "Baseline value": (
+                        f"{int(baseline_params.get('suppression_window', suppression_window))} "
+                        "operational steps"
+                    ),
+                },
+            ]
+        )
+
+        st.markdown("#### Baseline configuration")
+        st.dataframe(
+            baseline_configuration,
+            width="stretch",
+            hide_index=True,
+        )
+        st.caption(
+            "How to read this table: the row belonging to the selected experiment is the "
+            "setting that changes. All other rows remain fixed at these baseline values."
+        )
+
+        finding_kpi_1, finding_kpi_2, finding_kpi_3, finding_kpi_4 = st.columns(4)
+
+        with finding_kpi_1:
+            metric_card(
+                "Independent experiments",
+                f"{len(experiment_names)}",
+                "One parameter changed per experiment; all others stayed fixed.",
+                "blue",
+            )
+
+        with finding_kpi_2:
+            metric_card(
+                "Adaptive performed best",
+                f"{overview_adaptive_families} / {len(experiment_names)}",
+                "Experiments where Adaptive produced the stronger overall pattern.",
+                "green",
+            )
+
+        with finding_kpi_3:
+            metric_card(
+                "Static performed best",
+                f"{overview_static_families} / {len(experiment_names)}",
+                "Experiments where Static produced the stronger overall pattern.",
+                "orange",
+            )
+
+        with finding_kpi_4:
+            metric_card(
+                "No clear winner",
+                f"{overview_tied_families}",
+                "Experiments where neither policy won most tested settings.",
+                "blue",
+            )
+
+        st.markdown("### What was tested?")
+        st.markdown(
+            """
+            <div class="question-card">
+                Seven different operating parameters were examined. For example, the tests
+                changed analyst capacity, transaction volume, investigation cost and alert
+                thresholds. Only one parameter was changed at a time, so any difference in
+                the results can be linked to that specific setting.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.markdown("### What was the overall result?")
+        st.markdown(
+            f"""
+            <div class="takeaway">
+                The <strong>Adaptive policy</strong> produced the stronger overall result in
+                <strong>{overview_adaptive_families} of the {len(experiment_names)} experiments</strong>.
+                The Static policy was stronger in <strong>{overview_static_families}</strong>
+                experiment, while <strong>{overview_tied_families}</strong> experiment had no
+                clear winner. This means Adaptive performed better more often, but it was not
+                the best option under every tested configuration.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        difference_col, difference_text_col = st.columns([1, 2.25])
+
+        with difference_col:
+            metric_card(
+                "Largest recall difference",
+                f"{largest_gap_value:.2%}",
+                largest_gap_experiment,
+                "orange",
+            )
+
+        with difference_text_col:
+            threshold_detail = (
+                f" at a tested value of {largest_gap_setting:g}"
+                if largest_gap_setting is not None
+                else ""
+            )
+            st.markdown(
+                f"""
+                <div class="warning">
+                    <strong>Where was the largest difference observed?</strong><br>
+                    The largest difference between the two policies appeared during the
+                    <strong>{html.escape(largest_gap_experiment)}</strong> experiment
+                    {html.escape(threshold_detail)}. Their fraud recall differed by
+                    <strong>{largest_gap_value:.2%}</strong>, meaning one policy detected that
+                    much more of the known fraud than the other under this setting.
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        st.markdown("### What does this mean?")
+        st.markdown(
+            f"""
+            <div class="takeaway">
+                Overall, the decision layer responded in a consistent and understandable way
+                when its operating settings changed. The Adaptive policy was generally the
+                stronger option across the tested experiments, but the results also show that
+                no policy is automatically best under every possible configuration. The purpose
+                of these checks is therefore to demonstrate predictable behaviour, not to claim
+                universal superiority.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+        st.markdown("## Detailed experiment results")
+
         st.markdown("### What did each experiment show?")
         summary_rows = []
         all_frames = []
@@ -2512,7 +2939,6 @@ with sensitivity_tab:
                 {
                     "Experiment": experiment_name,
                     "Values tested": definition["display_values"],
-                    "Why it was tested": definition["purpose"],
                     "Main finding": build_plain_finding(frame),
                 }
             )
@@ -2556,13 +2982,31 @@ with sensitivity_tab:
         )
 
         chart_frame = selected_frame[["value", "static_recall", "adaptive_recall"]].copy()
+        chart_frame["static_recall"] = chart_frame["static_recall"] * 100
+        chart_frame["adaptive_recall"] = chart_frame["adaptive_recall"] * 100
         chart_frame = chart_frame.set_index("value").rename(
             columns={
                 "static_recall": "Static recall",
                 "adaptive_recall": "Adaptive recall",
             }
         )
-        st.line_chart(chart_frame, width="stretch")
+
+        x_axis_labels = {
+            "Transaction volume": "Transaction volume (transactions)",
+            "Analyst capacity": "Analyst capacity (alerts per operational step)",
+            "Investigation cost": "Investigation cost (€ per investigation)",
+            "Suppression window": "Suppression window (operational steps)",
+            "Adaptive budget multiplier": "Adaptive budget multiplier",
+            "Static threshold": "Static fraud threshold",
+            "Minimum Adaptive threshold": "Minimum Adaptive fraud threshold",
+        }
+
+        st.line_chart(
+            chart_frame,
+            x_label=x_axis_labels[selected_experiment],
+            y_label="Fraud recall (%)",
+            width="stretch",
+        )
 
         detail_display = selected_frame[[
             "value",
@@ -2587,13 +3031,17 @@ with sensitivity_tab:
                 "static_recall": "Static recall",
                 "adaptive_recall": "Adaptive recall",
                 "recall_difference": "Adaptive recall difference",
-                "static_cost": "Static operational cost",
-                "adaptive_cost": "Adaptive operational cost",
-                "adaptive_cost_saving": "Adaptive cost saving",
+                "static_cost": "Static estimated operational cost (€)",
+                "adaptive_cost": "Adaptive estimated operational cost (€)",
+                "adaptive_cost_saving": "Estimated Adaptive cost saving (€)",
                 "winner": "Preferred policy",
             }
         )
         st.dataframe(detail_display, width="stretch", hide_index=True)
+        st.caption(
+            "Sensitivity cost values are simulation estimates. They are used to compare "
+            "policies under identical assumptions rather than to claim observed banking losses."
+        )
 
         st.markdown(
             f"""
@@ -2601,40 +3049,7 @@ with sensitivity_tab:
                 <strong>Plain-language interpretation</strong><br>
                 {html.escape(build_plain_finding(selected_frame))}
                 A policy is marked as preferable when it detects a larger share of fraud.
-                When recall is equal, the policy with the lower operational cost is preferred.
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        family_winners = []
-        for experiment_name in experiment_names:
-            frame = pd.DataFrame(result_map[experiment_name])
-            counts = frame["winner"].value_counts()
-            adaptive_count = int(counts.get("Adaptive", 0))
-            static_count = int(counts.get("Static", 0))
-            if adaptive_count > static_count:
-                family_winners.append("Adaptive")
-            elif static_count > adaptive_count:
-                family_winners.append("Static")
-            else:
-                family_winners.append("Tie")
-
-        adaptive_families = family_winners.count("Adaptive")
-        static_families = family_winners.count("Static")
-        tied_families = family_winners.count("Tie")
-
-        st.markdown(
-            f"""
-            <div class="takeaway">
-                <strong>Overall sensitivity finding</strong><br>
-                Adaptive produced the more favourable pattern in
-                <strong>{adaptive_families}</strong> of the
-                <strong>{len(experiment_names)}</strong> parameter families.
-                Static was stronger in <strong>{static_families}</strong>, while
-                <strong>{tied_families}</strong> families had no clear majority.
-                This supports a generally stronger Adaptive policy only if the individual
-                tables also show explainable changes. It does not prove universal superiority.
+                When recall is equal, the policy with the lower estimated operational cost is preferred.
             </div>
             """,
             unsafe_allow_html=True,
@@ -2648,5 +3063,9 @@ with sensitivity_tab:
                     "parameter_families": experiment_names,
                     "total_tested_settings": total_settings,
                     "fixed_settings": "Current sidebar values except the parameter under test",
+                    "endpoint": "/simulation/sensitivity",
+                    "execution_metadata": saved_analysis.get(
+                        "execution_metadata", {}
+                    ),
                 }
             )

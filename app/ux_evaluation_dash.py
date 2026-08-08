@@ -472,6 +472,14 @@ def prepare_sensitivity_results(
     grouped: dict[str, list[dict[str, Any]]] = {}
 
     for row in payload.get("results", []):
+        # The UX evaluation reports transaction-volume scenarios up to 10,000
+        # transactions. Ignore any larger legacy result returned by the backend.
+        if (
+            str(row.get("experiment", "")) == "Transaction volume"
+            and n(row.get("tested_value")) > 10000
+        ):
+            continue
+
         static_recall = n(row.get("static_recall"))
         adaptive_recall = n(row.get("adaptive_recall"))
         static_cost = n(row.get("static_operational_cost"))
@@ -558,14 +566,15 @@ with st.sidebar.expander(
     )
 
     alert_budget_per_step = st.number_input(
-        "Alerts allowed per operational step",
+        "Analyst capacity (alerts per operational step)",
         min_value=1,
         max_value=5000,
         value=50,
         step=5,
         help=(
-            "Maximum number of cases analysts can review during each "
-            "simulation decision window."
+            "Maximum number of alerts that can enter human investigation in each "
+            "operational step. Increase or decrease this value to test how analyst "
+            "resources affect overflow, workload and fraud coverage."
         ),
     )
 
@@ -586,11 +595,11 @@ with st.sidebar.expander(
     expanded=False,
 ):
     investigation_cost = st.number_input(
-        "Cost per investigation",
+        "Assumed cost per investigation (€)",
         min_value=0.0,
         value=10.0,
         step=1.0,
-        help="Assumed cost of reviewing one alert.",
+        help="Experimental assumption: estimated cost assigned to reviewing one alert. This is not an observed banking cost.",
     )
 
     static_threshold = st.slider(
@@ -804,9 +813,23 @@ with executive_tab:
     adaptive_batch_alerts = i(adaptive_batch.get("selected_alerts"))
     adaptive_investigated_alerts = i(adaptive_seq.get("selected_alerts"))
 
+    # Cost transparency: keep the existing backend methodology, but expose its
+    # components so users can see exactly what the simulation estimate means.
+    static_seq_investigation_cost = n(static_seq.get("investigation_cost_total"))
+    adaptive_seq_investigation_cost = n(adaptive_seq.get("investigation_cost_total"))
+    static_seq_missed_fraud_cost = n(static_seq.get("missed_fraud_cost"))
+    adaptive_seq_missed_fraud_cost = n(adaptive_seq.get("missed_fraud_cost"))
+    static_seq_missed_frauds = i(static_seq.get("frauds_missed"))
+    adaptive_seq_missed_frauds = i(adaptive_seq.get("frauds_missed"))
+    static_seq_total_cost = n(static_seq.get("total_operational_cost"))
+    adaptive_seq_total_cost = n(adaptive_seq.get("total_operational_cost"))
+    sequential_cost_saving = static_seq_total_cost - adaptive_seq_total_cost
+
     st.markdown("### Experiment overview")
 
-    k1, k2, k3, k4, k5 = st.columns(5)
+    # Keep the executive layer deliberately compact: three KPIs only.
+    # Alert-volume details remain available in the exact-results table below.
+    k1, k2, k3 = st.columns(3)
 
     with k1:
         metric_card(
@@ -820,7 +843,7 @@ with executive_tab:
         metric_card(
             "Static frauds detected",
             f"{static_batch_frauds} → {static_seq_frauds}",
-            "Batch result followed by Sequential result.",
+            "Batch result → Sequential result.",
             "orange",
         )
 
@@ -828,24 +851,8 @@ with executive_tab:
         metric_card(
             "Adaptive frauds detected",
             f"{adaptive_batch_frauds} → {adaptive_seq_frauds}",
-            "Batch result followed by Sequential result.",
+            "Batch result → Sequential result.",
             "green",
-        )
-
-    with k4:
-        metric_card(
-            "Static alerts selected",
-            f"{static_batch_alerts:,} → {static_investigated_alerts:,}",
-            "Batch alerts followed by alerts investigated in Sequential replay.",
-            "orange",
-        )
-
-    with k5:
-        metric_card(
-            "Adaptive alerts selected",
-            f"{adaptive_batch_alerts:,} → {adaptive_investigated_alerts:,}",
-            "Batch alerts followed by alerts investigated in Sequential replay.",
-            "blue",
         )
 
     st.markdown("### Main comparison")
@@ -892,6 +899,13 @@ with executive_tab:
 
     st.markdown("### Exact results")
 
+    st.info(
+        "Cost values shown in this dashboard are simulated estimates, not observed "
+        "banking losses. Estimated operational cost combines the configured "
+        "investigation cost with the estimated cost assigned to missed fraud cases. "
+        "All monetary values are displayed in euros (€)."
+    )
+
     comparison_table = pd.DataFrame(
         [
             {
@@ -901,7 +915,7 @@ with executive_tab:
                 "Frauds missed": i(static_batch.get("frauds_missed")),
                 "Precision": n(static_batch.get("precision")),
                 "Recall": n(static_batch.get("recall")),
-                "Operational cost": n(
+                "Estimated operational cost (€)": n(
                     static_batch.get("total_operational_cost")
                 ),
             },
@@ -912,7 +926,7 @@ with executive_tab:
                 "Frauds missed": i(adaptive_batch.get("frauds_missed")),
                 "Precision": n(adaptive_batch.get("precision")),
                 "Recall": n(adaptive_batch.get("recall")),
-                "Operational cost": n(
+                "Estimated operational cost (€)": n(
                     adaptive_batch.get("total_operational_cost")
                 ),
             },
@@ -923,7 +937,7 @@ with executive_tab:
                 "Frauds missed": i(static_seq.get("frauds_missed")),
                 "Precision": n(static_seq.get("precision")),
                 "Recall": n(static_seq.get("recall")),
-                "Operational cost": n(
+                "Estimated operational cost (€)": n(
                     static_seq.get("total_operational_cost")
                 ),
             },
@@ -934,7 +948,7 @@ with executive_tab:
                 "Frauds missed": i(adaptive_seq.get("frauds_missed")),
                 "Precision": n(adaptive_seq.get("precision")),
                 "Recall": n(adaptive_seq.get("recall")),
-                "Operational cost": n(
+                "Estimated operational cost (€)": n(
                     adaptive_seq.get("total_operational_cost")
                 ),
             },
@@ -944,8 +958,8 @@ with executive_tab:
     comparison_display = comparison_table.copy()
     comparison_display["Precision"] = comparison_display["Precision"].map(pct)
     comparison_display["Recall"] = comparison_display["Recall"].map(pct)
-    comparison_display["Operational cost"] = (
-        comparison_display["Operational cost"].map(money)
+    comparison_display["Estimated operational cost (€)"] = (
+        comparison_display["Estimated operational cost (€)"].map(money)
     )
 
     table_col, table_note_col = st.columns([2.25, 1])
@@ -979,6 +993,116 @@ with executive_tab:
             """,
             unsafe_allow_html=True,
         )
+
+    st.markdown("### Cost impact in the Sequential simulation")
+
+    cost_kpi_col, cost_explanation_col = st.columns([1, 2.25])
+    with cost_kpi_col:
+        if sequential_cost_saving >= 0:
+            metric_card(
+                "Estimated cost avoided by Adaptive",
+                money(sequential_cost_saving),
+                "Static estimated cost minus Adaptive estimated cost in the Sequential replay.",
+                "green",
+            )
+        else:
+            metric_card(
+                "Estimated additional cost of Adaptive",
+                money(abs(sequential_cost_saving)),
+                "Adaptive estimated cost minus Static estimated cost in the Sequential replay.",
+                "orange",
+            )
+
+    with cost_explanation_col:
+        st.markdown(
+            f"""
+            <div class="question-card">
+                <strong>What do these euro amounts mean?</strong><br>
+                They are <strong>simulation-based estimates</strong>, not observed bank losses.
+                For each policy, estimated operational cost is the sum of the cost of
+                investigated alerts and the transaction amounts of fraud cases that were
+                missed under the current simulation assumptions. The current assumed review
+                cost is <strong>{money(investigation_cost)}</strong> per investigated alert.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("### How is estimated operational cost calculated?")
+
+    st.markdown(
+        f"""
+        <div class="question-card">
+            <strong>Formula used in this simulation</strong><br><br>
+            <strong>Estimated operational cost</strong> = investigation cost + estimated value of missed fraud<br>
+            <strong>Investigation cost</strong> = investigated alerts × assumed review cost
+            ({money(investigation_cost)} per alert)<br>
+            <strong>Estimated value of missed fraud</strong> = sum of the <code>amount</code> values
+            of fraud transactions that were missed.<br><br>
+            The transaction amount is used as a <strong>proxy for direct financial loss</strong>.
+            These are experimental simulation estimates, not observed bank accounting losses.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    cost_breakdown = pd.DataFrame(
+        [
+            {
+                "Policy": "Static Sequential",
+                "Missed fraud cases": static_seq_missed_frauds,
+                "Estimated value of missed fraud (€)": static_seq_missed_fraud_cost,
+                "Investigated alerts": static_investigated_alerts,
+                "Investigation cost (€)": static_seq_investigation_cost,
+                "Total estimated operational cost (€)": static_seq_total_cost,
+            },
+            {
+                "Policy": "Adaptive Sequential",
+                "Missed fraud cases": adaptive_seq_missed_frauds,
+                "Estimated value of missed fraud (€)": adaptive_seq_missed_fraud_cost,
+                "Investigated alerts": adaptive_investigated_alerts,
+                "Investigation cost (€)": adaptive_seq_investigation_cost,
+                "Total estimated operational cost (€)": adaptive_seq_total_cost,
+            },
+        ]
+    )
+
+    cost_breakdown_display = cost_breakdown.copy()
+    for cost_column in [
+        "Estimated value of missed fraud (€)",
+        "Investigation cost (€)",
+        "Total estimated operational cost (€)",
+    ]:
+        cost_breakdown_display[cost_column] = (
+            cost_breakdown_display[cost_column].map(money)
+        )
+
+    st.dataframe(
+        cost_breakdown_display,
+        width="stretch",
+        hide_index=True,
+    )
+
+    st.markdown(
+        f"""
+        <div class="takeaway">
+            <strong>Worked example from the current simulation</strong><br><br>
+            <strong>Static:</strong> {static_investigated_alerts:,} investigated alerts ×
+            {money(investigation_cost)} = {money(static_seq_investigation_cost)} investigation cost.
+            The {static_seq_missed_frauds:,} missed fraud cases have a combined transaction value of
+            {money(static_seq_missed_fraud_cost)}. Therefore, estimated operational cost =
+            {money(static_seq_investigation_cost)} + {money(static_seq_missed_fraud_cost)} =
+            <strong>{money(static_seq_total_cost)}</strong>.<br><br>
+            <strong>Adaptive:</strong> {adaptive_investigated_alerts:,} investigated alerts ×
+            {money(investigation_cost)} = {money(adaptive_seq_investigation_cost)} investigation cost.
+            The {adaptive_seq_missed_frauds:,} missed fraud cases have a combined transaction value of
+            {money(adaptive_seq_missed_fraud_cost)}. Therefore, estimated operational cost =
+            {money(adaptive_seq_investigation_cost)} + {money(adaptive_seq_missed_fraud_cost)} =
+            <strong>{money(adaptive_seq_total_cost)}</strong>.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     st.markdown("### Batch versus Sequential performance")
 
@@ -1078,22 +1202,18 @@ with executive_tab:
             ),
         )
 
-    sequential_cost_saving = (n(static_seq.get("total_operational_cost"))
-        - n(adaptive_seq.get("total_operational_cost"))
-    )
-
     if sequential_cost_saving > 0:
         cost_phrase = (
-            f"and lowers total operational cost by "
+            f"and lowers estimated operational cost by "
             f"{money(sequential_cost_saving)}"
         )
     elif sequential_cost_saving < 0:
         cost_phrase = (
-            f"but increases total operational cost by "
+            f"but increases estimated operational cost by "
             f"{money(abs(sequential_cost_saving))}"
         )
     else:
-        cost_phrase = "with no change in total operational cost"
+        cost_phrase = "with no change in estimated operational cost"
 
     st.markdown(
         f"""
@@ -1112,12 +1232,12 @@ with executive_tab:
     if sequential_recall_gain > 0 and sequential_cost_saving > 0:
         recommendation = (
             "Adaptive is preferred under the current configuration because it "
-            "combines higher Sequential recall with lower operational cost."
+            "combines higher Sequential recall with lower estimated operational cost."
         )
     elif sequential_recall_gain > 0:
         recommendation = (
             "Adaptive improves fraud coverage, but management should review the "
-            "additional cost and workload before selecting it."
+            "additional estimated cost and workload before selecting it."
         )
     elif sequential_recall_gain < 0:
         recommendation = (
@@ -1126,7 +1246,7 @@ with executive_tab:
         )
     else:
         recommendation = (
-            "The policies provide equal Sequential recall. Prefer the lower-cost "
+            "The policies provide equal Sequential recall. Prefer the lower estimated-cost "
             "or simpler option unless another operational objective justifies Adaptive."
         )
 
@@ -1183,8 +1303,16 @@ with executive_tab:
             statistics. It is separate from an operational step and does not control
             analyst-capacity resets.
 
-            **Operational cost:** investigation cost plus the estimated cost of fraud
-            cases that were missed.
+            **Estimated operational cost:** a simulation-based measure equal to the
+            investigation cost plus the estimated missed-fraud loss. Investigation cost is
+            calculated as investigated alerts × assumed cost per investigation. In the current
+            implementation, missed-fraud loss is based on the transaction amounts of fraud
+            cases that were not detected. It is an experimental decision-support measure, not
+            an observed bank accounting figure.
+
+            **Estimated cost avoided by Adaptive:** Static Sequential estimated operational
+            cost minus Adaptive Sequential estimated operational cost. A positive value means
+            Adaptive produces the lower simulated cost under the current assumptions.
 
             **Operational step:** one chronological decision cycle of the sequential
             replay. Suppression, ranking and analyst capacity are applied independently
@@ -1281,6 +1409,12 @@ with capacity_tab:
         "affects its candidate alerts and investigation queue."
     )
 
+    st.info(
+        f"Current analyst capacity: {int(alert_budget_per_step)} alerts per operational step. "
+        "You can change this directly from Main controls in the left sidebar to test "
+        "how more or fewer analyst resources affect the queue."
+    )
+
     policy_choice = st.radio(
         "Policy",
         ["Static", "Adaptive"],
@@ -1322,38 +1456,30 @@ with capacity_tab:
 
     budget_overflow = rejected
 
-    # Results first.
-    k1, k2, k3, k4 = st.columns(4)
+    # Keep only the three outcome KPIs here. Candidate volume is shown in the funnel below.
+    k1, k2, k3 = st.columns(3)
 
     with k1:
         metric_card(
-            "Candidate alerts",
-            f"{candidates:,}",
-            f"Initially proposed by the {policy_choice} policy.",
-            "blue",
+            "Investigated alerts",
+            f"{accepted:,}",
+            "Alerts that actually entered the analyst queue.",
+            "green",
         )
 
     with k2:
         metric_card(
-            "Investigated alerts",
-            f"{accepted:,}",
-            "Actually entered the analyst queue.",
-            "green",
+            "Suppressed alerts",
+            f"{suppressed:,}",
+            "Repeated alerts filtered before capacity was applied.",
+            "orange",
         )
 
     with k3:
         metric_card(
-            "Suppressed alerts",
-            f"{suppressed:,}",
-            "Filtered as repeated entity alerts.",
-            "orange",
-        )
-
-    with k4:
-        metric_card(
-             "Budget overflow",
+             "Capacity-rejected alerts",
              f"{rejected:,}",
-             "Candidate alerts that could not be investigated because the analyst budget was exhausted.",
+             "Eligible alerts that could not be investigated because analyst capacity was exhausted.",
              "red",
         )
 
@@ -1589,18 +1715,22 @@ with capacity_tab:
         else:
             step_frame = step_frame.sort_values("step").reset_index(drop=True)
 
-            # Keep the visible table focused on the six values needed to
-            # explain how the per-step analyst limit produced the final result.
+            # Show both the per-step analyst limit and any capacity that remained
+            # unused. This makes it clear that a value such as 49 investigated
+            # alerts with a capacity of 50 does not mean that one alert was lost;
+            # it means that only 49 eligible alerts were available in that step.
             step_breakdown = pd.DataFrame(
                 {
                     "Step": step_frame["step"].map(i),
                     "Candidate": step_frame["candidate_alerts"].map(i),
                     "Suppressed": step_frame["suppressed_alerts"].map(i),
                     "Eligible": step_frame["eligible_alerts"].map(i),
+                    "Capacity": int(alert_budget_per_step),
                     "Investigated": step_frame["investigated_alerts"].map(i),
                     "Overflow": step_frame[
                         "capacity_rejected_alerts"
                     ].map(i),
+                    "Unused capacity": step_frame["unused_capacity"].map(i),
                 }
             )
 
@@ -1611,10 +1741,14 @@ with capacity_tab:
                         "Candidate": int(step_breakdown["Candidate"].sum()),
                         "Suppressed": int(step_breakdown["Suppressed"].sum()),
                         "Eligible": int(step_breakdown["Eligible"].sum()),
+                        "Capacity": int(step_breakdown["Capacity"].sum()),
                         "Investigated": int(
                             step_breakdown["Investigated"].sum()
                         ),
                         "Overflow": int(step_breakdown["Overflow"].sum()),
+                        "Unused capacity": int(
+                            step_breakdown["Unused capacity"].sum()
+                        ),
                     }
                 ]
             )
@@ -1627,6 +1761,13 @@ with capacity_tab:
                 step_breakdown,
                 width="stretch",
                 hide_index=True,
+            )
+
+            st.caption(
+                "Unused capacity is the number of analyst investigation slots that "
+                "remained empty because fewer eligible alerts were available in that "
+                "operational step. It does not represent a lost alert or a missed "
+                "transaction, and unused capacity is not carried forward to later steps."
             )
 
             # Use the API fields, rather than the displayed totals row, to
@@ -2038,7 +2179,7 @@ with monitoring_tab:
                 "capacity_rejected": "Budget overflow",
                 "frauds_missed": "Frauds missed",
                 "recall": "Recall",
-                "operational_cost": "Operational cost",
+                "operational_cost": "Estimated operational cost (€)",
             }
         )
 
@@ -2054,7 +2195,7 @@ with monitoring_tab:
             <div class="takeaway">
                 <strong>How to read the table</strong><br>
                 Each row is one consecutive transaction window. Compare rows to identify
-                workload peaks, missed fraud and changes in operational cost.
+                workload peaks, missed fraud and changes in estimated operational cost.
             </div>
             """,
             unsafe_allow_html=True,
@@ -2249,8 +2390,8 @@ with monitoring_tab:
 
         render_monitoring_chart(
             column="operational_cost",
-            title="Operational Cost per Monitoring Window",
-            y_axis_label="Operational Cost (€)",
+            title="Estimated Operational Cost per Monitoring Window",
+            y_axis_label="Estimated Operational Cost (€)",
             value_formatter=lambda value: f"€{value:,.2f}",
             interpretation=(
                 "This chart combines investigation workload with the cost assigned "
@@ -2331,7 +2472,7 @@ with monitoring_tab:
                 Highest candidate workload: <strong>{candidate_peak_text}</strong>.<br>
                 Largest budget overflow: <strong>{rejected_peak_text}</strong>.<br>
                 Most missed fraud: <strong>{missed_peak_text}</strong>.<br>
-                Highest operational cost: <strong>{cost_peak_text}</strong>.<br><br>
+                Highest estimated operational cost: <strong>{cost_peak_text}</strong>.<br><br>
                 {html.escape(stability_text)}
             </div>
             """,
@@ -2378,8 +2519,8 @@ with sensitivity_tab:
     experiment_definitions = {
         "Transaction volume": {
             "parameter": "limit",
-            "values": (1000.0, 3000.0, 10000.0, 50000.0),
-            "display_values": "1,000 · 3,000 · 10,000 · 50,000 transactions",
+            "values": (1000.0, 3000.0, 10000.0),
+            "display_values": "1,000 · 3,000 · 10,000 transactions",
             "purpose": "Tests how the system behaves as the transaction workload grows while analyst resources remain fixed.",
         },
         "Analyst capacity": {
@@ -2890,13 +3031,17 @@ with sensitivity_tab:
                 "static_recall": "Static recall",
                 "adaptive_recall": "Adaptive recall",
                 "recall_difference": "Adaptive recall difference",
-                "static_cost": "Static operational cost",
-                "adaptive_cost": "Adaptive operational cost",
-                "adaptive_cost_saving": "Adaptive cost saving",
+                "static_cost": "Static estimated operational cost (€)",
+                "adaptive_cost": "Adaptive estimated operational cost (€)",
+                "adaptive_cost_saving": "Estimated Adaptive cost saving (€)",
                 "winner": "Preferred policy",
             }
         )
         st.dataframe(detail_display, width="stretch", hide_index=True)
+        st.caption(
+            "Sensitivity cost values are simulation estimates. They are used to compare "
+            "policies under identical assumptions rather than to claim observed banking losses."
+        )
 
         st.markdown(
             f"""
@@ -2904,7 +3049,7 @@ with sensitivity_tab:
                 <strong>Plain-language interpretation</strong><br>
                 {html.escape(build_plain_finding(selected_frame))}
                 A policy is marked as preferable when it detects a larger share of fraud.
-                When recall is equal, the policy with the lower operational cost is preferred.
+                When recall is equal, the policy with the lower estimated operational cost is preferred.
             </div>
             """,
             unsafe_allow_html=True,
