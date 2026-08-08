@@ -550,7 +550,7 @@ with st.sidebar.expander(
 ):
     transaction_limit = st.selectbox(
         "Transactions evaluated",
-        [1000, 3000, 10000, 50000],
+        [1000, 3000, 10000],
         index=2,
         help=(
             "How many transactions are included in the current simulation."
