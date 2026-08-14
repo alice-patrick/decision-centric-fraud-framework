@@ -1,330 +1,495 @@
-# Adaptive Fraud Intelligence
+Adaptive Fraud Intelligence
 
-![Python](https://img.shields.io/badge/Python-3.10+-blue)
-![FastAPI](https://img.shields.io/badge/FastAPI-Backend-green)
-![Streamlit](https://img.shields.io/badge/Streamlit-Dashboard-red)
-![Scikit-Learn](https://img.shields.io/badge/ML-Scikit--Learn-orange)
-![Status](https://img.shields.io/badge/Status-Completed-success)
 
-Decision-Centric Fraud Detection Framework for Adaptive Alert Selection, Cost Optimization, Analyst Prioritization, and Operational Monitoring
 
----
 
-## Research Contribution
 
-This project demonstrates how fraud-detection systems can be extended beyond predictive modeling by incorporating operational decision intelligence.
 
-The framework introduces:
 
-* Budget-aware alert selection
-* Cost-sensitive fraud prioritization
-* Analyst-centered investigation workflows
-* Operational monitoring and simulation
+Decision-Centric Fraud Detection Framework for Adaptive Alert Selection, Analyst Prioritisation, Sequential Evaluation, Cost-Aware Decision Support, and Operational Monitoring
 
-The proposed architecture separates fraud prediction from fraud-response decision making, allowing organizations to optimize investigation resources while maximizing fraud detection effectiveness.
+Research prototype: evaluated on the synthetic PaySim mobile-money dataset through offline chronological replay. It does not process live banking or UPI transactions. Identifiers shown by the application are simulation identifiers and do not represent real customers, cards, accounts, or payment identifiers.
 
----
+Overview
 
-## Overview
+Traditional fraud-detection projects often stop after producing a fraud probability. This project focuses on the operational question that follows:
 
-Traditional fraud detection systems often optimize only predictive performance metrics such as ROC-AUC, Precision, Recall, and F1 Score.
+Which suspicious transactions should be investigated when analyst capacity is limited?
 
-This project focuses instead on operational fraud decision-making under real-world investigation constraints.
+The framework separates fraud prediction from fraud-response decision making. A machine-learning model generates fraud-risk estimates; a dedicated decision layer then creates candidate alerts, suppresses repeated alerts, prioritises eligible cases, and applies per-step analyst-capacity constraints.
 
-The system combines machine learning fraud scoring with adaptive decision logic, investigation-budget management, analyst prioritization, ranking strategies, and cost-aware alert selection to simulate realistic fraud operations workflows.
+The result is a research-oriented Fraud Decision Support System (DSS) rather than a prediction-only dashboard.
 
-Instead of asking:
+Research Contribution
 
-> "Which transactions are fraudulent?"
+The framework integrates:
 
-the system answers:
+machine-learning fraud scoring;
 
-> "Which transactions should be investigated given operational constraints?"
+Static and Adaptive alert-selection policies;
 
----
+adaptive candidate-alert budgeting;
 
-## What Makes This Different?
+operational priority ranking;
 
-Most fraud detection projects stop after generating fraud probabilities.
+repeat-alert suppression;
 
-This project introduces a dedicated decision layer that transforms fraud predictions into operational actions.
+per-step analyst capacity;
 
-The framework incorporates:
+prioritised investigation queues;
 
-* Investigation-capacity constraints
-* Analyst workload considerations
-* Adaptive alert budgeting
-* Cost-aware ranking
-* Operational prioritization
-* Monitoring and simulation
+transaction-level decision explanations;
 
-The objective is not only to identify fraud but also to optimize fraud-response decisions under realistic operational conditions.
+sequential chronological replay;
 
----
+operational monitoring;
 
-## Key Capabilities
+cost-aware evaluation; and
 
-* Fraud Detection
-* Decision Intelligence
-* Adaptive Alert Selection
-* Investigation Budget Optimization
-* Analyst Queue Prioritization
-* Cost-Aware Decision Making
-* Operating Curve Optimization
-* Sequential Fraud Simulation
-* Real-Time Monitoring
-* Scenario-Based Simulation
-* Interactive Parameter Tuning
-* Investigation-Capacity Modeling
-* FastAPI Backend
-* Streamlit Dashboard
+controlled sensitivity analysis.
 
----
+The central idea is:
 
-## Core Objectives
+Fraud score
+    ↓
+Alert-selection policy
+    ↓
+Candidate alert
+    ↓
+Suppression
+    ↓
+Priority ranking
+    ↓
+Analyst capacity
+    ↓
+Investigation decision
+    ↓
+Operational evaluation
 
-* Detect fraudulent financial transactions
-* Reduce total operational fraud cost
-* Improve fraud recall under investigation constraints
-* Prioritize analyst review queues intelligently
-* Simulate adaptive fraud monitoring workflows
-* Compare static threshold systems against adaptive decision systems
-* Optimize investigation budgets
-* Support operational fraud decision making
+Static vs Adaptive Policies
 
----
+Static
 
-## Features
+The Static policy uses a fixed fraud-risk threshold. Transactions reaching the configured threshold become candidate alerts.
 
-### Machine Learning Layer
+Adaptive
 
-* Fraud probability scoring
-* Transaction risk estimation
-* Feature engineering pipeline
-* Probability calibration support
-* Threshold evaluation
+The Adaptive policy combines:
 
-### Decision Intelligence Layer
+a minimum Adaptive fraud threshold, which defines the minimum fraud risk required for consideration; and
 
-* Adaptive alert budgeting
-* Cost-aware fraud ranking
-* Investigation-capacity-aware alert selection
-* Static threshold vs adaptive strategy comparison
-* Risk-zone transaction prioritization
-* Alert suppression logic
-* Decision-engine driven alert generation
+an Adaptive candidate-alert budget, controlled relative to the Static baseline alert volume by the budget multiplier.
 
-### Ranking Strategies
+Both policies subsequently pass through the same sequential operational constraints.
 
-Supported ranking policies:
+Fraud risk is not rank score
 
-* risk_zone
-* score
-* benefit
-* hybrid
+Fraud risk answers:
 
-These strategies allow different operational approaches to fraud investigation prioritization.
+How likely does the ML model think this transaction is fraud?
 
+It is a calibrated model probability.
 
-### Simulation Settings
+Rank score answers:
 
-The platform allows users to simulate different fraud-operation environments through configurable decision parameters.
+How important is it to investigate this eligible alert relative to the others?
 
-Available controls:
+It is an operational priority value used for ordering alerts and is not a probability.
 
-* Transaction Limit
-* Investigation Cost per Alert
-* Ranking Policy Selection
-* Risk-Zone Threshold
-* Alert Budget Multiplier
+Sequential Operational Evaluation
 
-These controls enable experimentation with different operational scenarios and investigation-capacity constraints.
+The primary operational evaluation is an offline chronological replay, not a deployed live transaction stream.
 
-Examples:
+Transactions are processed in PaySim step order. Transactions sharing the same step form one operational decision cycle.
 
-* Increasing the alert budget captures more fraud but generates additional investigations.
-* Raising the risk-zone threshold creates a stricter review process.
-* Changing ranking policies alters analyst prioritization behavior.
-* Increasing investigation cost changes cost-benefit optimization decisions.
+Within each step:
 
-The dashboard supports scenario-based experimentation, allowing users to explore how operational policies influence fraud-detection effectiveness, analyst workload, and resource utilization.
+transactions arrive;
 
+fraud risk is calculated;
 
-### Analyst Operations Layer
+Static or Adaptive logic creates candidate alerts;
 
-* Dynamic analyst queue generation
-* High / Medium / Low severity classification
-* Investigation prioritization
-* Analyst workload simulation
-* Operational review management
+repeated alerts may be suppressed;
 
-### Monitoring & Simulation
+eligible alerts are prioritised;
 
-* Sequential fraud simulation
-* Operating curve analysis
-* Monitoring metrics
-* Real-time simulation support
-* Alert volume analysis
-* Operational performance tracking
-* Fraud recall monitoring
-* Cost analysis
-* Expected-benefit analysis
-* Missed-fraud tracking
-* False-positive monitoring
+analyst capacity is applied; and
 
-### Interfaces
+investigated alerts are retrospectively compared with PaySim fraud labels.
 
-* FastAPI backend
-* Streamlit interactive dashboard
+Unused analyst capacity is not carried into the next step.
 
----
+The backend validates the accounting identity:
 
-## Main Result
+Candidate alerts
+= Investigated alerts
++ Suppressed alerts
++ Capacity-rejected alerts
 
-Compared to the static threshold baseline, the adaptive decision system achieved improved fraud recall while simultaneously reducing total operational cost.
+Machine-Learning Layer
 
-Example simulation using 3,000 PaySim transactions.
+The predictive component uses a scikit-learn pipeline centred on Logistic Regression.
 
-| System           | Recall | Precision | Alerts | Total Cost |
-| ---------------- | ------ | --------- | ------ | ---------- |
-| Static Threshold | 0.625  | 0.033     | 303    | 600,060    |
-| Decision System  | 0.875  | 0.038     | 372    | 552,563    |
+Core PaySim variables
 
-Additional operational metrics evaluated by the framework:
+step
 
-* Frauds Caught
-* Missed Frauds
-* False Positives
-* Alert Rate
-* Investigation Cost
-* Expected Fraud Loss Prevented
-* Total Expected Benefit
+type
 
+amount
 
-### Operational Interpretation
+oldbalanceOrg
 
-The adaptive decision system investigates a larger number of alerts while prioritizing transactions with higher operational value.
+newbalanceOrig
 
-Although alert volume increases, the reduction in missed fraud cases significantly lowers total operational cost.
+oldbalanceDest
 
-This demonstrates that fraud operations should optimize decision outcomes rather than relying solely on predictive thresholds.
+newbalanceDest
 
-The framework therefore shifts the focus from model-centric evaluation to decision-centric optimization.
+isFraud — evaluation target
 
-### Key Outcome
+Identifiers and isFlaggedFraud are excluded from predictive modelling.
 
-The adaptive decision engine:
+Engineered features
 
-* Increased fraud recall by 25%
-* Reduced total operational cost
-* Detected more fraud cases
-* Maintained operationally manageable alert volumes
-* Improved analyst prioritization efficiency
+log_amount
 
----
+origin_balance_error
 
-## Dashboard Preview
+destination_balance_error
 
-### Static Threshold vs Decision System
+abs_origin_balance_error
 
-The interactive dashboard allows users to compare static and adaptive fraud-investigation strategies, evaluate operational trade-offs, and simulate analyst decision workflows under configurable investigation constraints.
+abs_destination_balance_error
 
-![Dashboard Overview](docs/images/dashboard_overview.png)
+Numeric and categorical variables are handled through the preprocessing pipeline, and calibrated fraud probabilities can be passed to the decision layer.
 
----
+System Architecture
 
-### Operating Curve Analysis
-
-Evaluates the effect of investigation-budget expansion on:
-
-* Fraud Recall
-* Alert Volume
-* Investigation Cost
-* Operational Efficiency
-
-![Operating Curve](docs/images/operating_curve.png)
-
----
-
-### System Design
-
-Visualizes the end-to-end architecture of the fraud intelligence framework, including the predictive layer, decision engine, analyst operations layer, and monitoring components.
-
-![System Design](docs/images/system_design.png)
-
----
-
-### Analyst Investigation Queue
-
-Displays dynamically prioritized fraud alerts including:
-
-* Fraud score
-* Rank score
-* Expected benefit
-* Investigation cost
-* Severity level
-* Review reasoning
-
-![Analyst Queue](docs/images/analyst_queue.png)
-
-
----
-
-## System Architecture
-
-```mermaid
 flowchart TD
+    A[PaySim transactions] --> B[Feature engineering]
+    B --> C[Fraud detection model]
+    C --> D[Calibrated fraud-risk score]
+    D --> E{Decision policy}
+    E -->|Static| F[Fixed threshold]
+    E -->|Adaptive| G[Minimum threshold + candidate budget]
+    F --> H[Candidate alerts]
+    G --> H
+    H --> I[Repeat-alert suppression]
+    I --> J[Priority ranking]
+    J --> K[Per-step analyst capacity]
+    K --> L[Investigated alerts]
+    K --> M[Capacity-rejected alerts]
+    L --> N[Operational evaluation]
+    M --> N
+    N --> O[Monitoring + sensitivity analysis]
+    O --> P[FastAPI]
+    P --> Q[Streamlit dashboard]
 
-A[Raw Transactions]
---> B[Fraud Detection Model]
+Dashboard
 
-B --> C[Fraud Scores]
+The Streamlit dashboard uses progressive disclosure: high-level decision information is shown first, while methodological and technical detail remains available for deeper inspection.
 
-C --> D[Decision Engine]
+1. Executive Summary
 
-D --> E[Ranking Strategy]
+Provides the current Static vs Adaptive comparison:
 
-E --> F[Risk Zone]
-E --> G[Score Ranking]
-E --> H[Benefit Ranking]
-E --> I[Hybrid Ranking]
+recommended policy;
 
-F --> J[Alert Budget Manager]
-G --> J
-H --> J
-I --> J
+investigated alerts;
 
-J --> K[Analyst Investigation Queue]
+frauds detected and missed;
 
-K --> L[Operational Metrics]
+precision and recall;
 
-L --> M[FastAPI Backend]
+estimated operational cost; and
 
-M --> N[Streamlit Dashboard]
+management interpretation.
 
-N --> O[Overview]
-N --> P[Operating Curve]
-N --> Q[Analyst Queue]
-```
+The ideal Batch result is retained only as a methodological reference. The Sequential replay is the primary operational evaluation.
 
-The architecture separates prediction from decision-making.
+2. Analyst Capacity
 
-The machine learning model produces fraud risk scores, while the decision engine converts those scores into operational alerts using adaptive budgets, ranking strategies, analyst-prioritization logic, and investigation-capacity constraints.
+Explains how candidate alerts reach—or fail to reach—the analyst queue.
 
----
+It includes:
 
-## Project Structure
+investigated alerts;
 
-```text
+suppressed alerts;
+
+capacity-rejected alerts;
+
+Fraud Investigation Funnel;
+
+capacity by operational step;
+
+fraud risk by transaction type;
+
+full Prioritised Investigation Queue; and
+
+transaction-level Alert Decision Explanation.
+
+The queue includes investigated and non-investigated candidates so the capacity cutoff remains inspectable.
+
+3. Sequential Workflow
+
+Documents the seven-stage decision process and explicitly distinguishes the implementation from a true production real-time system.
+
+Correct terminology:
+
+Offline sequential simulation / chronological replay with real-time-oriented decision cycles.
+
+4. Monitoring
+
+Monitoring windows summarise consecutive transaction blocks for reporting. They are distinct from operational PaySim steps.
+
+The dashboard tracks:
+
+candidate alerts;
+
+investigated alerts;
+
+capacity overflow;
+
+frauds missed;
+
+recall; and
+
+simulation-based estimated operational cost.
+
+5. Sensitivity Analysis
+
+Seven operating parameters are tested while changing one parameter at a time:
+
+Parameter
+
+Tested values
+
+Transaction volume
+
+1,000 · 3,000 · 10,000
+
+Analyst capacity
+
+10–100 alerts per operational step
+
+Investigation cost
+
+€5 · €10 · €15 · €20 · €25
+
+Suppression window
+
+0 · 1 · 2 · 3 · 5 steps
+
+Adaptive budget multiplier
+
+1.0–2.0
+
+Static fraud threshold
+
+0.30 · 0.40 · 0.50 · 0.60 · 0.70
+
+Minimum Adaptive fraud threshold
+
+0.10 · 0.20 · 0.30 · 0.40 · 0.50
+
+The sensitivity interface includes:
+
+Decision Scenario Explorer;
+
+baseline configuration;
+
+summary results across all tested settings;
+
+full comparison evidence;
+
+experiment-specific drill-down; and
+
+interpretation of when Adaptive, Static, or neither policy is clearly preferable.
+
+Current Baseline Result
+
+For the current 10,000-transaction Sequential scenario with analyst capacity of 50 alerts per operational step:
+
+Metric
+
+Static
+
+Adaptive
+
+Investigated alerts
+
+313
+
+349
+
+Frauds detected
+
+27
+
+30
+
+Frauds missed
+
+41
+
+38
+
+Precision
+
+8.6%
+
+8.6%
+
+Recall
+
+39.7%
+
+44.1%
+
+Estimated operational cost
+
+€1,745,391.01
+
+€1,726,843.29
+
+Under this configuration, Adaptive achieves approximately:
+
++4.4 percentage points recall
+
++3 frauds detected
+
+€18,547.72 lower estimated operational cost
+
+These are simulation-based estimates, not observed banking losses.
+
+The sensitivity results also show that Adaptive is not universally superior. Its advantage depends on alert-selection strategy, analyst capacity, thresholds, suppression, workload, and other operating assumptions.
+
+Example Decision Scenario
+
+Changing Adaptive analyst capacity from 50 to 60 alerts per operational step gives:
+
+Outcome
+
+50/step
+
+60/step
+
+Candidate alerts
+
+1,020
+
+1,020
+
+Investigated alerts
+
+349
+
+402
+
+Frauds detected
+
+30
+
+32
+
+Recall
+
+44.1%
+
+47.1%
+
+Suppressed alerts
+
+21
+
+26
+
+Capacity-rejected alerts
+
+650
+
+592
+
+This illustrates the purpose of the DSS: operational parameters can be evaluated in terms of fraud coverage, workload, overflow, and estimated cost rather than model accuracy alone.
+
+Dataset, Privacy, and Scope
+
+The project uses the PaySim synthetic financial transaction dataset.
+
+No real customer, card, bank-account, UPI, or payment identifiers are required. Dashboard transaction IDs and entity references are simulation identifiers.
+
+The dataset is not included in the repository and is expected locally at:
+
+data/raw/AIML Dataset.csv
+
+Synthetic data is an explicit research limitation. Results should not be interpreted as validated production performance on a real financial institution's transaction stream.
+
+Model Persistence and Deployment
+
+The trained model should be loaded from a persisted/versioned model artifact rather than depending on in-memory training history.
+
+This is important for containerised deployment because process memory and runtime files may be ephemeral after restart.
+
+Required model artifacts, configuration, and registry information should therefore be available from version-controlled or otherwise persistent storage whenever the application starts.
+
+Technologies
+
+Machine Learning & Data
+
+Python
+
+Pandas
+
+NumPy
+
+scikit-learn
+
+Matplotlib
+
+Joblib
+
+Application
+
+FastAPI
+
+Streamlit
+
+REST APIs
+
+Storage & Evaluation
+
+SQLite
+
+persisted model artifacts / model registry
+
+sequential simulation
+
+sensitivity testing
+
+Development & Testing
+
+Git
+
+GitHub
+
+Pytest
+
+Project Structure
+
 app/
 ├── api/
+│   ├── main.py
+│   └── simulation.py
 ├── core/
+├── features/
 ├── model/
 ├── monitoring/
-├── tests/
-├── dashboard.py
-├── main.py
-└── streamlit_app.py
+├── simulation/
+├── streamlit_app.py
+└── ...
 
 decisioning/
 ├── analyst_budget.py
@@ -334,128 +499,116 @@ decisioning/
 ├── suppression.py
 └── thresholding.py
 
-scripts/
-├── check_cost_logic.py
-├── check_decision_engine.py
-├── check_end_to_end_decision.py
-├── check_model_loading.py
-├── check_thresholding.py
-├── evaluate_decision_strategies.py
-├── fraud_detection.py
-├── plot_operating_curve.py
-├── run_realtime_demo.py
-└── run_sequential_simulation.py
-
 config/
 data/
 docs/
 logs/
+metrics/
 models/
 notebooks/
-```
+scripts/
+tests/
 
----
+Run Locally
 
-## Technologies
+Install dependencies
 
-### Data Science & Machine Learning
-
-* Python
-* Pandas
-* NumPy
-* Scikit-Learn
-* Matplotlib
-* Joblib
-
-### Backend & Dashboard
-
-* FastAPI
-* Streamlit
-
-### Data Storage
-
-* SQLite
-
-### Development & Testing
-
-* Git
-* GitHub
-* Pytest
-* REST APIs
-
----
-
-## How To Run
-
-### Install dependencies
-
-```bash
 py -m pip install -r requirements.txt
-```
 
-### Add dataset
+Add PaySim data
 
-Place dataset here:
-
-```text
 data/raw/AIML Dataset.csv
-```
 
-### Run FastAPI backend
+Start FastAPI
 
-```bash
-py -m uvicorn app.api.main:app --reload
-```
+If the local dashboard is configured for port 8002:
 
-Backend:
+py -m uvicorn app.api.main:app --reload --port 8002
 
-```text
-http://127.0.0.1:8000
-```
+Start Streamlit
 
-### Run Streamlit dashboard
+py -m streamlit run app/streamlit_app.py
 
-```bash
-py -m streamlit run app/dashboard.py
-```
+The dashboard and API configuration must point to the same backend.
 
-Dashboard:
+Testing
 
-```text
-http://localhost:8501
-```
+Relevant checks include:
 
----
+model loading;
 
-## Dataset
+preprocessing;
 
-This project uses the PaySim synthetic financial transaction dataset.
+threshold logic;
 
-The dataset is not included in the repository due to size limitations.
+cost logic;
 
-Expected dataset path:
+suppression;
 
-```text
-data/raw/AIML Dataset.csv
-```
+decision-engine behaviour;
 
----
+API responses;
 
-## Future Improvements
+invalid inputs;
 
-* Concept drift detection
-* Analyst feedback loops
-* Online model retraining
-* Dynamic queue allocation
-* Real-time streaming integration
-* Reinforcement-learning prioritization
-* MLOps deployment pipeline
-* Production monitoring
+sequential accounting; and
 
----
+basic latency/performance behaviour.
 
-## Thesis Context
+Sensitivity analysis additionally tests robustness across different operating assumptions.
 
-This repository was developed as part of a Master's thesis focused on decision-centric fraud detection, adaptive transaction prioritization, cost optimization, analyst queue management, and monitoring for real-time capable fraud systems.
+Research Limitations
 
-The project explores how machine-learning predictions can be transformed into operational fraud decisions through adaptive prioritization, budget-aware alerting, analyst-centered investigation workflows, and decision-intelligence techniques designed for real-world fraud operations.
+This repository represents a research prototype, not a production fraud platform.
+
+Important limitations include:
+
+synthetic rather than institution-specific transaction data;
+
+offline chronological replay rather than a live event stream;
+
+retrospective fraud labels used for evaluation;
+
+simplified analyst-capacity assumptions;
+
+simulation-based cost estimates;
+
+no continuous online retraining;
+
+no production concept-drift response loop; and
+
+no validation within a live financial institution.
+
+Future Work
+
+Potential extensions include:
+
+evaluation on appropriately governed real transaction data;
+
+live event-stream integration;
+
+delayed analyst-feedback collection;
+
+concept-drift detection;
+
+controlled retraining and redeployment;
+
+richer analyst-allocation models;
+
+persistent production monitoring;
+
+model and policy versioning; and
+
+MLOps deployment pipelines.
+
+Thesis Context
+
+This repository was developed as part of a Master's thesis investigating how machine-learning fraud predictions can be transformed into operational decisions when investigation resources are limited.
+
+The core contribution is the integration of:
+
+fraud scoring → alert selection → suppression → prioritisation → analyst capacity → sequential evaluation → monitoring → sensitivity analysis
+
+within one explainable decision-support framework.
+
+The project therefore asks not only whether suspicious transactions can be detected, but whether machine-learning predictions can support better operational investigation decisions under realistic resource constraints.
