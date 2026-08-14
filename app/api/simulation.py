@@ -578,6 +578,7 @@ def run_sequential_policy(
     alert_budget_per_step: int,
     suppression_window: int,
     monitoring_window_size: int,
+    include_decision_rows: bool = True,
 ) -> dict[str, Any]:
     """
     Run the policy-independent Sequential Simulation over an
@@ -626,6 +627,81 @@ def run_sequential_policy(
         window_size=monitoring_window_size,
     )
 
+    # Transaction-type summary across all evaluated transactions.
+    # This is policy-independent descriptive context: it shows both the model's
+    # average predicted fraud risk and the retrospective PaySim fraud rate by type.
+    transaction_type_summary: list[dict[str, Any]] = []
+    if "type" in simulated_df.columns:
+        type_summary_df = (
+            simulated_df.groupby("type", dropna=False)
+            .agg(
+                transactions=("type", "size"),
+                average_fraud_score=("fraud_score", "mean"),
+                actual_frauds=("isFraud", "sum"),
+                actual_fraud_rate=("isFraud", "mean"),
+                candidate_alerts=("policy_alert_candidate", "sum"),
+                investigated_alerts=("selected_alert", "sum"),
+            )
+            .reset_index()
+        )
+
+        type_summary_df = type_summary_df.sort_values(
+            ["average_fraud_score", "actual_fraud_rate"],
+            ascending=[False, False],
+        )
+
+        # Convert numpy/pandas scalar types to plain Python-friendly values.
+        for column in [
+            "transactions",
+            "actual_frauds",
+            "candidate_alerts",
+            "investigated_alerts",
+        ]:
+            type_summary_df[column] = type_summary_df[column].astype(int)
+
+        transaction_type_summary = (
+            type_summary_df.astype(object)
+            .where(pd.notna(type_summary_df), None)
+            .to_dict(orient="records")
+        )
+
+    decision_rows: list[dict[str, Any]] = []
+    if include_decision_rows:
+        # Transaction-level audit rows used by the dashboard's investigation queue.
+        # Only policy candidates are returned to keep the normal API payload compact.
+        decision_columns = [
+            "transaction_id",
+            "step",
+            "type",
+            "amount",
+            "fraud_score",
+            "rank_score",
+            "policy_name",
+            "policy_alert_candidate",
+            "candidate_priority_rank",
+            "accepted_priority_rank",
+            "selected_alert",
+            "suppression_applied",
+            "capacity_rejected",
+            "sequential_decision",
+            "capacity_used_before_decision",
+            "capacity_remaining_after_decision",
+            "isFraud",
+        ]
+        available_decision_columns = [
+            column for column in decision_columns
+            if column in simulated_df.columns
+        ]
+        decision_rows_df = simulated_df.loc[
+            simulated_df["policy_alert_candidate"].fillna(False).astype(bool),
+            available_decision_columns,
+        ].copy()
+        decision_rows_df = decision_rows_df.astype(object).where(
+            pd.notna(decision_rows_df),
+            None,
+        )
+        decision_rows = decision_rows_df.to_dict(orient="records")
+
     return {
         "summary": summary,
         "operational_steps": (
@@ -638,6 +714,8 @@ def run_sequential_policy(
                 orient="records"
             )
         ),
+        "decision_rows": decision_rows,
+        "transaction_type_summary": transaction_type_summary,
     }
 
 
@@ -1163,6 +1241,43 @@ def _classify_policy_outcome(
     return "trade_off"
 
 
+def _validate_sequential_summary(
+    summary: dict[str, Any],
+    policy_name: str,
+) -> None:
+    """
+    Validate the accounting identity of the Sequential decision flow.
+
+    Every policy candidate must end in exactly one of three operational outcomes:
+    investigated, suppressed, or capacity-rejected.
+    """
+    required = [
+        "policy_candidate_alerts",
+        "selected_alerts",
+        "suppressed_alerts",
+        "capacity_rejected_alerts",
+    ]
+    missing = [key for key in required if key not in summary]
+    if missing:
+        raise ValueError(
+            f"{policy_name} sequential summary is missing operational fields: {missing}"
+        )
+
+    candidates = int(summary["policy_candidate_alerts"])
+    investigated = int(summary["selected_alerts"])
+    suppressed = int(summary["suppressed_alerts"])
+    rejected = int(summary["capacity_rejected_alerts"])
+
+    accounted = investigated + suppressed + rejected
+    if candidates != accounted:
+        raise ValueError(
+            f"{policy_name} sequential accounting mismatch: "
+            f"candidates={candidates}, investigated={investigated}, "
+            f"suppressed={suppressed}, capacity_rejected={rejected}, "
+            f"accounted={accounted}."
+        )
+
+
 def _build_sensitivity_row(
     experiment: str,
     api_parameter: str,
@@ -1171,6 +1286,8 @@ def _build_sensitivity_row(
     adaptive_summary: dict[str, Any],
 ) -> dict[str, Any]:
     """Create one dashboard-ready sensitivity result row."""
+    _validate_sequential_summary(static_summary, "Static")
+    _validate_sequential_summary(adaptive_summary, "Adaptive")
     static_recall = float(static_summary.get("recall", 0.0))
     adaptive_recall = float(adaptive_summary.get("recall", 0.0))
     static_cost = float(static_summary.get("total_operational_cost", 0.0))
@@ -1194,6 +1311,29 @@ def _build_sensitivity_row(
         "static_operational_cost": round(static_cost, 2),
         "adaptive_operational_cost": round(adaptive_cost, 2),
         "adaptive_cost_saving": round(static_cost - adaptive_cost, 2),
+
+        # Operational-flow fields are required by the dashboard's what-if
+        # explorer. Earlier versions omitted them, causing the UI helper to
+        # convert missing values to 0 and display false zero-overflow results.
+        "static_policy_candidate_alerts": int(
+            static_summary.get("policy_candidate_alerts", 0)
+        ),
+        "adaptive_policy_candidate_alerts": int(
+            adaptive_summary.get("policy_candidate_alerts", 0)
+        ),
+        "static_suppressed_alerts": int(
+            static_summary.get("suppressed_alerts", 0)
+        ),
+        "adaptive_suppressed_alerts": int(
+            adaptive_summary.get("suppressed_alerts", 0)
+        ),
+        "static_capacity_rejected_alerts": int(
+            static_summary.get("capacity_rejected_alerts", 0)
+        ),
+        "adaptive_capacity_rejected_alerts": int(
+            adaptive_summary.get("capacity_rejected_alerts", 0)
+        ),
+
         "winner": _classify_policy_outcome(
             static_summary=static_summary,
             adaptive_summary=adaptive_summary,
@@ -1358,6 +1498,7 @@ def sensitivity_analysis(
                 alert_budget_per_step=settings["alert_budget_per_step"],
                 suppression_window=settings["suppression_window"],
                 monitoring_window_size=settings["monitoring_window_size"],
+                include_decision_rows=False,
             )["summary"]
 
             adaptive_result = run_sequential_policy(
@@ -1368,6 +1509,7 @@ def sensitivity_analysis(
                 alert_budget_per_step=settings["alert_budget_per_step"],
                 suppression_window=settings["suppression_window"],
                 monitoring_window_size=settings["monitoring_window_size"],
+                include_decision_rows=False,
             )["summary"]
 
             sequential_cache[key] = (static_result, adaptive_result)
