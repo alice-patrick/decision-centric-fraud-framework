@@ -272,6 +272,21 @@ def i(value: Any) -> int:
     return int(round(n(value)))
 
 
+def optional_i(value: Any) -> int | None:
+    """Return None when an operational metric was not supplied by the API."""
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    try:
+        return int(round(float(value)))
+    except (TypeError, ValueError):
+        return None
+
+
 def money(value: Any) -> str:
     return f"€{n(value):,.2f}"
 
@@ -442,8 +457,16 @@ def load_data(params: dict[str, Any]) -> dict[str, Any]:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def load_sensitivity_data(base_params: dict[str, Any]) -> dict[str, Any]:
-    """Run all sensitivity experiments through one optimized API request."""
+def load_sensitivity_data(
+    base_params: dict[str, Any],
+    cache_schema_version: str = "operational-flow-v2",
+) -> dict[str, Any]:
+    """
+    Run all sensitivity experiments through one optimized API request.
+
+    The schema version is intentionally part of the cache key so a dashboard
+    release that needs new API fields cannot silently reuse an older payload.
+    """
     endpoint_params = {
         "limit": int(base_params["limit"]),
         "investigation_cost": float(base_params["investigation_cost"]),
@@ -513,9 +536,12 @@ def prepare_sensitivity_results(
                 "adaptive_investigated": i(row.get("adaptive_selected_alerts")),
                 "static_detected": i(row.get("static_frauds_detected")),
                 "adaptive_detected": i(row.get("adaptive_frauds_detected")),
-                "static_overflow": i(row.get("static_capacity_rejected_alerts")),
-                "adaptive_overflow": i(row.get("adaptive_capacity_rejected_alerts")),
-                "adaptive_suppressed": i(row.get("adaptive_suppressed_alerts")),
+                "static_candidates": optional_i(row.get("static_policy_candidate_alerts")),
+                "adaptive_candidates": optional_i(row.get("adaptive_policy_candidate_alerts")),
+                "static_suppressed": optional_i(row.get("static_suppressed_alerts")),
+                "adaptive_suppressed": optional_i(row.get("adaptive_suppressed_alerts")),
+                "static_overflow": optional_i(row.get("static_capacity_rejected_alerts")),
+                "adaptive_overflow": optional_i(row.get("adaptive_capacity_rejected_alerts")),
                 "winner": winner,
             }
         )
@@ -535,8 +561,27 @@ st.markdown(
     <div class="hero">
         <h1>Fraud Decision Support Dashboard</h1>
         <p>
-            This dashboard supports fraud-management decisions by showing how suspicious transactions move from a machine-learning score to a prioritised human-investigation queue under limited operational capacity.
+            Research prototype for evaluating how machine-learning fraud scores can be
+            translated into prioritised human-investigation decisions under limited
+            analyst capacity.
         </p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    """
+    <div class="info-box" style="margin-top:.65rem; margin-bottom:.85rem;">
+        <strong>About this prototype</strong><br>
+        <strong>Dataset:</strong> synthetic PaySim mobile-money transactions &nbsp;·&nbsp;
+        <strong>Evaluation:</strong> offline chronological replay &nbsp;·&nbsp;
+        <strong>Purpose:</strong> decision-support research, not live payment validation.<br>
+        <span class="small">
+            It does not process live banking or UPI transactions. Transaction IDs and
+            simulated entity identifiers shown in the dashboard do not correspond to real
+            customers, cards, accounts or payment identifiers.
+        </span>
     </div>
     """,
     unsafe_allow_html=True,
@@ -730,31 +775,6 @@ adaptive_windows = normalise_windows(
             [],
         )
     )
-)
-
-
-# =========================================================
-# QUICK USER GUIDE — ABOVE THE TABS
-# =========================================================
-
-st.markdown(
-    """
-    <div style="
-        max-width: 720px;
-        margin: 0 0 .7rem 0;
-        padding: .55rem .8rem;
-        border-left: 3px solid #1976d2;
-        border-radius: 8px;
-        background: rgba(25,118,210,.07);
-        font-size: .88rem;
-        line-height: 1.45;
-    ">
-        <strong>Quick tip</strong><br>
-        The experiment settings are available in the left sidebar.
-        Change one parameter at a time for a meaningful comparison.
-    </div>
-    """,
-    unsafe_allow_html=True,
 )
 
 
@@ -1271,14 +1291,8 @@ with capacity_tab:
     st.header("Analyst Capacity by Policy")
 
     st.caption(
-        "Select a policy to see how the same analyst-capacity constraint "
-        "affects its candidate alerts and investigation queue."
-    )
-
-    st.info(
-        f"Current analyst capacity: {int(alert_budget_per_step)} alerts per operational step. "
-        "You can change this directly from Main controls in the left sidebar to test "
-        "how more or fewer analyst resources affect the queue."
+        "Select a policy to see how candidate alerts move through suppression, "
+        "prioritisation and the per-step analyst-capacity limit."
     )
 
     policy_choice = st.radio(
@@ -1294,18 +1308,17 @@ with capacity_tab:
         else adaptive_seq
     )
 
-    candidates = i(
-        selected_summary.get("policy_candidate_alerts")
+    selected_payload = (
+        data.get("static_sequential", {})
+        if policy_choice == "Static"
+        else data.get("adaptive_sequential", {})
     )
-    accepted = i(
-        selected_summary.get("selected_alerts")
-    )
-    suppressed = i(
-        selected_summary.get("suppressed_alerts")
-    )
-    rejected = i(
-        selected_summary.get("capacity_rejected_alerts")
-    )
+
+    candidates = i(selected_summary.get("policy_candidate_alerts"))
+    accepted = i(selected_summary.get("selected_alerts"))
+    suppressed = i(selected_summary.get("suppressed_alerts"))
+    rejected = i(selected_summary.get("capacity_rejected_alerts"))
+    eligible_after_suppression = max(candidates - suppressed, 0)
 
     unique_steps = i(parameters.get("unique_steps"))
     maximum_capacity = i(
@@ -1315,21 +1328,16 @@ with capacity_tab:
         )
     )
 
-    eligible_after_suppression = max(
-       candidates - suppressed,
-       0,
-    )
-
-    budget_overflow = rejected
-
-    # Keep only the three outcome KPIs here. Candidate volume is shown in the funnel below.
+    # ---------------------------------------------------------
+    # POLICY-LEVEL CAPACITY OUTCOMES
+    # ---------------------------------------------------------
     k1, k2, k3 = st.columns(3)
 
     with k1:
         metric_card(
             "Investigated alerts",
             f"{accepted:,}",
-            "Alerts that actually entered the analyst queue.",
+            "Alerts that entered the human-investigation queue.",
             "green",
         )
 
@@ -1337,163 +1345,82 @@ with capacity_tab:
         metric_card(
             "Suppressed alerts",
             f"{suppressed:,}",
-            "Repeated alerts filtered before capacity was applied.",
+            "Repeated alerts filtered before analyst capacity was used.",
             "orange",
         )
 
     with k3:
         metric_card(
-             "Capacity-rejected alerts",
-             f"{rejected:,}",
-             "Eligible alerts that could not be investigated because analyst capacity was exhausted.",
-             "red",
+            "Capacity-rejected alerts",
+            f"{rejected:,}",
+            "Eligible alerts that could not be investigated because the step limit was full.",
+            "red",
         )
 
-    st.markdown("### How were the investigated alerts calculated?")
+    # ---------------------------------------------------------
+    # FRAUD INVESTIGATION FUNNEL — directly under policy KPIs
+    # ---------------------------------------------------------
+    st.markdown("### Fraud Investigation Funnel")
 
-    st.markdown(
-        f"""
-        <div class="capacity-step-intro">
-            <strong>What does “step” mean here?</strong><br>
-            In this dashboard, a <strong>step is one chronological decision cycle in the replay</strong>.
-            Transactions assigned to the same step are evaluated together before the replay
-            moves to the next step. The current replay contains
-            <strong>{unique_steps} operational steps</strong>, and analyst capacity is applied
-            independently inside each one. A step should not be interpreted as a fixed real-world hour.
-        </div>
-        """,
-        unsafe_allow_html=True,
+    frauds_detected = i(selected_summary.get("frauds_detected"))
+    frauds_missed = i(selected_summary.get("frauds_missed"))
+    false_positives = i(selected_summary.get("false_positives"))
+    total_transactions = i(
+        selected_summary.get("total_transactions", transaction_limit)
     )
 
-    step_col1, step_col2, step_col3 = st.columns(3)
-
-    with step_col1:
-        st.markdown(
-            f"""
-            <div class="capacity-step-card tone-blue">
-                <strong>Replay unit</strong>
-                <div class="step-value">1 step = 1 decision cycle</div>
-                <div class="small">
-                    Transactions in the same step are processed together before the replay continues.
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    with step_col2:
-        st.markdown(
-            f"""
-            <div class="capacity-step-card tone-green">
-                <strong>Capacity per step</strong>
-                <div class="step-value">{int(alert_budget_per_step)} alerts maximum</div>
-                <div class="small">
-                    The analyst limit resets when the replay moves to the next step.
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    with step_col3:
-        st.markdown(
-            """
-            <div class="capacity-step-card tone-orange">
-                <strong>No capacity carry-over</strong>
-                <div class="step-value">Unused slots expire</div>
-                <div class="small">
-                    Spare capacity in one step cannot be transferred to a later step.
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    st.caption(
-        "Within every step, the sequence is: candidate alerts → suppression → "
-        "priority ranking → analyst-capacity limit."
-    )
-
-    st.markdown("### Step-by-step calculation")
-
-    calculation_table = pd.DataFrame(
+    funnel_rows = pd.DataFrame(
         [
-            {
-                "Stage": "1. Candidate alerts",
-                "Explanation": "Alerts generated by the selected policy",
-                "Value": candidates,
-            },
-            {
-                "Stage": "2. Suppressed alerts",
-                "Explanation": "Repeated alerts removed",
-                "Value": -suppressed,
-            },
-            {
-                "Stage": "3. Eligible alerts",
-                "Explanation": "Candidate alerts remaining after suppression",
-                "Value": eligible_after_suppression,
-            },
-            {
-                "Stage": "4. Operational steps",
-                "Explanation": "Chronological PaySim steps in the replay",
-                "Value": unique_steps,
-            },
-            {
-                "Stage": "5. Analyst capacity per step",
-                "Explanation": "Maximum alerts investigated in each step",
-                "Value": int(alert_budget_per_step),
-            },
-            {
-                "Stage": "6. Maximum possible investigations",
-                "Explanation": f"{int(alert_budget_per_step)} × {unique_steps}",
-                "Value": maximum_capacity,
-            },
-            {
-                "Stage": "7. Actual investigated alerts",
-                "Explanation": "Alerts accepted into the analyst queue",
-                "Value": accepted,
-            },
-            {
-                "Stage": "8. Budget overflow",
-                "Explanation": "Eligible alerts that could not be investigated",
-                "Value": budget_overflow,
-            },
+            {"Stage": "Transactions evaluated", "Count": total_transactions},
+            {"Stage": "Candidate alerts", "Count": candidates},
+            {"Stage": "Eligible after suppression", "Count": eligible_after_suppression},
+            {"Stage": "Investigated alerts", "Count": accepted},
+            {"Stage": "Frauds detected", "Count": frauds_detected},
         ]
     )
 
-    st.dataframe(
-        calculation_table,
+    st.bar_chart(
+        funnel_rows.set_index("Stage")[["Count"]],
         width="stretch",
-        hide_index=True,
     )
 
-    st.markdown(
-        f"""
-        <div class="takeaway">
-            <strong>Why were only {accepted:,} alerts investigated instead of {maximum_capacity:,}?</strong>
-            <br><br>
-            The analyst team could theoretically investigate up to
-            <strong>{maximum_capacity:,}</strong> alerts
-            ({int(alert_budget_per_step)} alerts × {unique_steps} operational steps).
-            <br><br>
-            However, analyst capacity is enforced separately inside every operational step.
-            Some steps contained fewer eligible alerts after suppression, while other steps
-            contained more alerts than analysts could review.
-            <br><br>
-            Because unused capacity from one operational step cannot be transferred to a later
-            step, the replay finished with <strong>{accepted:,}</strong> investigated alerts
-            instead of the theoretical maximum of <strong>{maximum_capacity:,}</strong>.
-        </div>
-        """,
-        unsafe_allow_html=True,
+    funnel_col1, funnel_col2, funnel_col3 = st.columns(3)
+    with funnel_col1:
+        metric_card(
+            "Frauds detected",
+            f"{frauds_detected:,}",
+            "Investigated alerts confirmed as fraud in the evaluation labels (TP).",
+            "green",
+        )
+    with funnel_col2:
+        metric_card(
+            "Frauds missed",
+            f"{frauds_missed:,}",
+            "Fraud transactions that did not reach investigation (FN).",
+            "red",
+        )
+    with funnel_col3:
+        metric_card(
+            "Non-fraud alerts investigated",
+            f"{false_positives:,}",
+            "Investigated alerts that were non-fraud in the evaluation labels (FP).",
+            "orange",
+        )
+
+    st.caption(
+        f"Alert does not mean confirmed fraud: {accepted:,} alerts were investigated under "
+        f"the current {policy_choice} scenario, while {frauds_detected:,} were fraud in the "
+        "PaySim evaluation labels."
     )
 
-    st.markdown("### Operational step breakdown")
-
-    selected_payload = (
-        data.get("static_sequential", {})
-        if policy_choice == "Static"
-        else data.get("adaptive_sequential", {})
+    # ---------------------------------------------------------
+    # OPERATIONAL STEP BREAKDOWN — one concise explanation only
+    # ---------------------------------------------------------
+    st.markdown("### Analyst capacity by operational step")
+    st.caption(
+        f"Each PaySim step is treated as one decision cycle. Up to "
+        f"{int(alert_budget_per_step)} eligible alerts can be investigated in each step; "
+        "unused capacity is not carried to the next step."
     )
 
     step_records = selected_payload.get("operational_steps", [])
@@ -1501,9 +1428,8 @@ with capacity_tab:
 
     if step_frame.empty:
         st.info(
-            "No operational-step records were returned by the API. Restart the "
-            "FastAPI service after replacing both `sequential.py` and the simulation "
-            "API file with the updated versions."
+            "No operational-step records were returned by the API. Restart FastAPI after "
+            "loading the updated sequential simulation files."
         )
     else:
         required_step_columns = {
@@ -1514,7 +1440,6 @@ with capacity_tab:
             "investigated_alerts",
             "capacity_rejected_alerts",
             "unused_capacity",
-            "capacity_status",
         }
         missing_step_columns = sorted(
             required_step_columns - set(step_frame.columns)
@@ -1522,16 +1447,12 @@ with capacity_tab:
 
         if missing_step_columns:
             st.warning(
-                "Operational-step data were returned, but required fields are "
-                f"missing: {missing_step_columns}"
+                "Operational-step data are missing fields: "
+                f"{missing_step_columns}"
             )
         else:
             step_frame = step_frame.sort_values("step").reset_index(drop=True)
 
-            # Show both the per-step analyst limit and any capacity that remained
-            # unused. This makes it clear that a value such as 49 investigated
-            # alerts with a capacity of 50 does not mean that one alert was lost;
-            # it means that only 49 eligible alerts were available in that step.
             step_breakdown = pd.DataFrame(
                 {
                     "Step": step_frame["step"].map(i),
@@ -1540,7 +1461,7 @@ with capacity_tab:
                     "Eligible": step_frame["eligible_alerts"].map(i),
                     "Capacity": int(alert_budget_per_step),
                     "Investigated": step_frame["investigated_alerts"].map(i),
-                    "Overflow": step_frame[
+                    "Capacity rejected": step_frame[
                         "capacity_rejected_alerts"
                     ].map(i),
                     "Unused capacity": step_frame["unused_capacity"].map(i),
@@ -1555,24 +1476,21 @@ with capacity_tab:
                         "Suppressed": int(step_breakdown["Suppressed"].sum()),
                         "Eligible": int(step_breakdown["Eligible"].sum()),
                         "Capacity": int(step_breakdown["Capacity"].sum()),
-                        "Investigated": int(
-                            step_breakdown["Investigated"].sum()
+                        "Investigated": int(step_breakdown["Investigated"].sum()),
+                        "Capacity rejected": int(
+                            step_breakdown["Capacity rejected"].sum()
                         ),
-                        "Overflow": int(step_breakdown["Overflow"].sum()),
                         "Unused capacity": int(
                             step_breakdown["Unused capacity"].sum()
                         ),
                     }
                 ]
             )
+
             step_breakdown = pd.concat(
                 [step_breakdown, totals_row],
                 ignore_index=True,
             )
-
-            # Streamlit/pyarrow requires one consistent dtype per column.
-            # "Step" contains numeric step labels plus the final "Total" row,
-            # so render the whole display column as text.
             step_breakdown["Step"] = step_breakdown["Step"].astype(str)
 
             st.dataframe(
@@ -1581,133 +1499,384 @@ with capacity_tab:
                 hide_index=True,
             )
 
-            st.caption(
-                "Unused capacity is the number of analyst investigation slots that "
-                "remained empty because fewer eligible alerts were available in that "
-                "operational step. It does not represent a lost alert or a missed "
-                "transaction, and unused capacity is not carried forward to later steps."
+    # ---------------------------------------------------------
+    # TRANSACTION-LEVEL DATA PREPARATION
+    # ---------------------------------------------------------
+    decision_rows = selected_payload.get("decision_rows", [])
+    queue_frame = pd.DataFrame(decision_rows)
+
+    if queue_frame.empty:
+        st.warning(
+            "Transaction-level queue rows were not returned by the API. Use the queue-enabled "
+            "simulation API and restart FastAPI."
+        )
+    else:
+        for bool_column in [
+            "policy_alert_candidate",
+            "selected_alert",
+            "suppression_applied",
+            "capacity_rejected",
+        ]:
+            if bool_column in queue_frame.columns:
+                queue_frame[bool_column] = (
+                    queue_frame[bool_column].fillna(False).astype(bool)
+                )
+
+        queue_frame["Outcome"] = "Candidate"
+        if "selected_alert" in queue_frame.columns:
+            queue_frame.loc[
+                queue_frame["selected_alert"], "Outcome"
+            ] = "Investigate"
+        if "suppression_applied" in queue_frame.columns:
+            queue_frame.loc[
+                queue_frame["suppression_applied"], "Outcome"
+            ] = "Suppressed"
+        if "capacity_rejected" in queue_frame.columns:
+            queue_frame.loc[
+                queue_frame["capacity_rejected"], "Outcome"
+            ] = "Capacity reached"
+
+        def queue_reason(row: pd.Series) -> str:
+            outcome = str(row.get("Outcome", "Candidate"))
+            priority = row.get("candidate_priority_rank")
+            priority_text = (
+                f"priority #{int(priority)} in step {i(row.get('step'))}"
+                if pd.notna(priority)
+                else "its policy ranking"
             )
 
-            # Use the API fields, rather than the displayed totals row, to
-            # describe overload and unused capacity accurately.
-            overloaded_steps = int(
-                (step_frame["capacity_rejected_alerts"].map(i) > 0).sum()
+            if outcome == "Investigate":
+                return (
+                    f"Eligible candidate with {priority_text}; analyst capacity was still available."
+                )
+            if outcome == "Suppressed":
+                return (
+                    "Removed from investigation because a previously accepted alert for the same "
+                    "simulation entity was still inside the suppression window."
+                )
+            if outcome == "Capacity reached":
+                return (
+                    f"Removed from investigation despite being eligible: {priority_text}, but "
+                    "higher-priority alerts filled the per-step analyst capacity first."
+                )
+            return "Policy candidate without a final Sequential outcome."
+
+        queue_frame["Decision reason"] = queue_frame.apply(
+            queue_reason,
+            axis=1,
+        )
+
+        queue_sort_columns = [
+            column
+            for column in ["step", "candidate_priority_rank", "rank_score"]
+            if column in queue_frame.columns
+        ]
+        if queue_sort_columns:
+            ascending_map = {
+                "step": True,
+                "candidate_priority_rank": True,
+                "rank_score": False,
+            }
+            queue_frame = queue_frame.sort_values(
+                queue_sort_columns,
+                ascending=[
+                    ascending_map[column]
+                    for column in queue_sort_columns
+                ],
+                na_position="last",
+            ).reset_index(drop=True)
+
+        queue_frame["Priority"] = range(1, len(queue_frame) + 1)
+        queue_frame["Transaction"] = (
+            queue_frame["transaction_id"]
+            .astype(str)
+            .map(lambda value: f"TX-{value}")
+        )
+        queue_frame["Fraud risk"] = pd.to_numeric(
+            queue_frame.get("fraud_score"),
+            errors="coerce",
+        )
+        queue_frame["Fraud risk (%)"] = queue_frame["Fraud risk"] * 100.0
+        queue_frame["Rank score"] = pd.to_numeric(
+            queue_frame.get("rank_score"),
+            errors="coerce",
+        )
+
+        # -----------------------------------------------------
+        # FRAUD RISK BY TRANSACTION TYPE
+        # -----------------------------------------------------
+        st.markdown("### Fraud risk by transaction type")
+
+        type_summary_records = selected_payload.get("transaction_type_summary", [])
+        type_summary_frame = pd.DataFrame(type_summary_records)
+
+        if type_summary_frame.empty:
+            st.info(
+                "Transaction-type summary is not available yet. Replace the simulation API "
+                "with the updated queue API and restart FastAPI."
             )
-            underused_steps = int(
-                (step_frame["unused_capacity"].map(i) > 0).sum()
+        else:
+            type_summary_frame = type_summary_frame.copy()
+            type_summary_frame["Average model fraud risk (%)"] = (
+                pd.to_numeric(
+                    type_summary_frame["average_fraud_score"],
+                    errors="coerce",
+                ) * 100
             )
-            fully_used_steps = int(
-                (
-                    (step_frame["capacity_rejected_alerts"].map(i) == 0)
-                    & (step_frame["unused_capacity"].map(i) == 0)
-                ).sum()
+            type_summary_frame["Observed fraud rate (%)"] = (
+                pd.to_numeric(
+                    type_summary_frame["actual_fraud_rate"],
+                    errors="coerce",
+                ) * 100
             )
+
+            type_summary_display = pd.DataFrame(
+                {
+                    "Transaction type": type_summary_frame["type"].astype(str),
+                    "Transactions": type_summary_frame["transactions"].map(i),
+                    "Average model fraud risk (%)": type_summary_frame[
+                        "Average model fraud risk (%)"
+                    ],
+                    "Observed frauds": type_summary_frame["actual_frauds"].map(i),
+                    "Observed fraud rate (%)": type_summary_frame[
+                        "Observed fraud rate (%)"
+                    ],
+                    "Candidate alerts": type_summary_frame["candidate_alerts"].map(i),
+                    "Investigated": type_summary_frame["investigated_alerts"].map(i),
+                }
+            ).sort_values(
+                "Average model fraud risk (%)",
+                ascending=False,
+            )
+
+            st.dataframe(
+                type_summary_display,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "Average model fraud risk (%)": st.column_config.NumberColumn(
+                        format="%.2f%%",
+                        help=(
+                            "Mean fraud probability assigned by the model to transactions "
+                            "of this type in the current replay."
+                        ),
+                    ),
+                    "Observed fraud rate (%)": st.column_config.NumberColumn(
+                        format="%.2f%%",
+                        help=(
+                            "Retrospective PaySim ground-truth fraud rate for this transaction "
+                            "type. This value is for evaluation only and is not known at decision time."
+                        ),
+                    ),
+                },
+            )
+
+            highest_model_type = type_summary_display.iloc[0]
+            highest_actual_type = type_summary_display.sort_values(
+                "Observed fraud rate (%)",
+                ascending=False,
+            ).iloc[0]
+
+            st.caption(
+                f"Highest average model fraud risk in the current replay: "
+                f"{highest_model_type['Transaction type']} "
+                f"({highest_model_type['Average model fraud risk (%)']:.2f}%). "
+                f"Highest observed PaySim fraud rate: "
+                f"{highest_actual_type['Transaction type']} "
+                f"({highest_actual_type['Observed fraud rate (%)']:.2f}%). "
+                "Model risk and observed fraud rate are different measures and should not be treated as identical."
+            )
+
+        # -----------------------------------------------------
+        # PRIORITISED INVESTIGATION QUEUE — LAST SECTION
+        # -----------------------------------------------------
+        st.markdown("### Prioritised Investigation Queue")
+        st.caption(
+            "All transaction IDs and entity references in this queue are synthetic simulation "
+            "identifiers from PaySim-based evaluation; no real customer or payment identifiers are displayed."
+        )
+        st.caption(
+            "Transaction-level candidate queue. Priority is enforced separately within each "
+            "operational step before the analyst-capacity decision is made."
+        )
+
+        outcome_filter = st.multiselect(
+            "Queue outcome",
+            ["Investigate", "Capacity reached", "Suppressed"],
+            default=["Investigate", "Capacity reached", "Suppressed"],
+            key=f"queue_outcome_{policy_choice}",
+        )
+
+        # Keep the complete filtered candidate queue. The table is scrollable so the
+        # analyst can move past the investigated alerts and inspect lower-priority
+        # candidates that were suppressed or rejected when capacity was exhausted.
+        visible_queue = queue_frame[
+            queue_frame["Outcome"].isin(outcome_filter)
+        ].copy()
+
+        display_queue = pd.DataFrame(
+            {
+                "Priority": visible_queue["Priority"],
+                "Transaction": visible_queue["Transaction"],
+                "Type": visible_queue.get("type"),
+                "Step": visible_queue.get("step"),
+                "Fraud risk (%)": visible_queue["Fraud risk (%)"],
+                "Rank score": visible_queue["Rank score"],
+                "Decision": visible_queue["Outcome"],
+                "Reason": visible_queue["Decision reason"],
+            }
+        )
+
+        investigated_in_view = int(
+            (visible_queue["Outcome"] == "Investigate").sum()
+        )
+        not_investigated_in_view = int(
+            visible_queue["Outcome"].isin(["Capacity reached", "Suppressed"]).sum()
+        )
+
+        st.caption(
+            f"Showing the full filtered queue: {len(visible_queue):,} candidate alerts "
+            f"({investigated_in_view:,} investigated; {not_investigated_in_view:,} not investigated). "
+            "Scroll inside the table to inspect lower-priority alerts beyond the analyst-capacity cutoff."
+        )
+
+        st.dataframe(
+            display_queue,
+            width="stretch",
+            height=560,
+            hide_index=True,
+            column_config={
+                "Fraud risk (%)": st.column_config.NumberColumn(
+                    "Fraud risk (%)",
+                    format="%.1f%%",
+                    help=(
+                        "Probability assigned by the fraud model. 85% means the model estimates "
+                        "an 85% probability of fraud."
+                    ),
+                ),
+                "Rank score": st.column_config.NumberColumn(
+                    "Rank score",
+                    format="%.3f",
+                    help=(
+                        "Operational priority score used to order eligible alerts. It is not "
+                        "a probability and should not be interpreted as a percentage."
+                    ),
+                ),
+            },
+        )
+
+        with st.expander(
+            "Fraud risk vs Rank score — difference and calculation",
+            expanded=False,
+        ):
+            st.markdown(
+                f"""
+                **Fraud risk (%)** answers: *How likely does the ML model think this transaction is fraud?*  
+
+                The trained model receives the transaction fields used at scoring time:
+                `step`, `type`, `amount`, `oldbalanceOrg`, `newbalanceOrig`,
+                `oldbalanceDest` and `newbalanceDest`. The trained preprocessing/model
+                pipeline converts these inputs into a probability with `predict_proba`.
+                A score of `0.85` is displayed here as **85% fraud risk**.
+
+                **Rank score** answers: *How important is it to investigate this eligible alert relative to the others?*  
+
+                Under the current `risk_zone` policy, the operational ranking function uses:
+                **fraud risk + transaction amount + assumed investigation cost + false-negative factor**.
+                The ranking logic therefore gives more weight to alerts where the potential
+                fraud exposure is larger, rather than ranking by probability alone.
+
+                The cost-aware components are:
+                - **Expected fraud loss** = fraud probability × transaction amount × false-negative factor
+                - **Expected investigation cost** = the estimated review-cost exposure under the current
+                  investigation-cost assumption ({money(investigation_cost)} per review)
+                - these values feed the cost-aware **Rank score**, which is used only to order alerts.
+
+                **Important:** Rank score is **not** a probability and its absolute value is not interpreted
+                as a percentage. Only its relative order matters: a larger value means higher operational priority.
+                """
+            )
+
+        st.markdown("#### Alert Decision Explanation")
+        transaction_options = visible_queue["Transaction"].tolist()
+
+        if transaction_options:
+            selected_transaction = st.selectbox(
+                "Select a transaction to explain",
+                transaction_options,
+                key=f"decision_explanation_{policy_choice}",
+            )
+            selected_row = visible_queue.loc[
+                visible_queue["Transaction"] == selected_transaction
+            ].iloc[0]
+
+            step_priority = selected_row.get("candidate_priority_rank")
+            step_priority_text = (
+                f"#{int(step_priority)} in step {i(selected_row.get('step'))}"
+                if pd.notna(step_priority)
+                else "Not available"
+            )
+            decision_tone = (
+                "green"
+                if selected_row["Outcome"] == "Investigate"
+                else "orange"
+                if selected_row["Outcome"] == "Suppressed"
+                else "red"
+            )
+
+            detail_col1, detail_col2, detail_col3, detail_col4, detail_col5 = st.columns(5)
+            with detail_col1:
+                metric_card(
+                    "Transaction type",
+                    str(selected_row.get("type", "Unknown")),
+                    "PaySim transaction category.",
+                    "blue",
+                )
+            with detail_col2:
+                metric_card(
+                    "Fraud risk",
+                    f"{n(selected_row.get('fraud_score')):.1%}",
+                    "ML-estimated probability of fraud.",
+                    "blue",
+                )
+            with detail_col3:
+                metric_card(
+                    "Rank score",
+                    f"{n(selected_row.get('rank_score')):,.3f}",
+                    "Operational priority; not a probability.",
+                    "blue",
+                )
+            with detail_col4:
+                metric_card(
+                    "Priority in step",
+                    step_priority_text,
+                    "Order used when capacity is applied.",
+                    "blue",
+                )
+            with detail_col5:
+                metric_card(
+                    "Final decision",
+                    str(selected_row["Outcome"]),
+                    "Sequential operational outcome.",
+                    decision_tone,
+                )
 
             st.markdown(
                 f"""
-                <div class="info-box">
-                    <strong>How to read this table</strong><br><br>
-                    <strong>{overloaded_steps}</strong> operational steps exceeded the
-                    analyst limit and produced budget overflow.
-                    <strong>{underused_steps}</strong> steps finished with unused capacity,
-                    while <strong>{fully_used_steps}</strong> used exactly the available
-                    limit without rejecting additional alerts.
+                <div class="decision-box">
+                    <strong>Why this decision?</strong><br>
+                    {html.escape(str(selected_row['Decision reason']))}
                     <br><br>
-                    Eligible alerts are candidate alerts remaining after suppression.
-                    When eligible alerts exceed
-                    <strong>{int(alert_budget_per_step)}</strong>, only the highest-priority
-                    alerts are investigated and the remainder become budget overflow.
+                    <span class="small">
+                    Evaluation label: <strong>{"Confirmed fraud" if i(selected_row.get('isFraud')) == 1 else "Non-fraud transaction"}</strong>.
+                    This label is available only for retrospective PaySim evaluation and is not used by the analyst at decision time.
+                    </span>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
 
-    outcome_table = pd.DataFrame(
-        [
-            {
-                "Outcome": "Investigated",
-                "Alerts": accepted,
-                "Share of candidates": (
-                    accepted / candidates if candidates else 0.0
-                ),
-            },
-            {
-                "Outcome": "Suppressed",
-                "Alerts": suppressed,
-                "Share of candidates": (
-                    suppressed / candidates if candidates else 0.0
-                ),
-            },
-            {
-                "Outcome": "Capacity rejected",
-                "Alerts": rejected,
-                "Share of candidates": (
-                    rejected / candidates if candidates else 0.0
-                ),
-            },
-        ]
-    )
-
-    st.markdown("### Alert outcomes")
-    st.bar_chart(
-        outcome_table.set_index("Outcome")[["Alerts"]],
-        width="stretch",
-    )
-
-    acceptance_rate = (
-        accepted / candidates
-        if candidates else 0.0
-    )
-    rejection_rate = (
-        rejected / candidates
-        if candidates else 0.0
-    )
-
-    st.markdown(
-        f"""
-        <div class="takeaway">
-            <strong>Interpretation</strong><br>
-            Analysts reviewed <strong>{acceptance_rate:.1%}</strong> of the
-            <strong>{html.escape(policy_choice)}</strong> candidate alerts, while
-            <strong>{rejection_rate:.1%}</strong> were rejected for capacity.
-            This shows how much of the selected policy's proposed workload could
-            actually reach human investigation.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-
-    if rejected > accepted:
-        capacity_recommendation = (
-            f"Capacity is highly restrictive for the {policy_choice} policy. "
-            "Test more analyst slots, stronger prioritisation or narrower "
-            "candidate generation before expanding the alert workload."
-        )
-    elif rejected > 0:
-        capacity_recommendation = (
-            f"Some {policy_choice} candidate workload remains outside the queue. "
-            "A moderate increase in capacity or improved ranking may increase "
-            "fraud coverage."
-        )
-    else:
-        capacity_recommendation = (
-            f"Capacity is not currently the main bottleneck for the "
-            f"{policy_choice} policy. Focus on precision and investigation cost."
-        )
-
-    st.markdown(
-        f"""
-        <div class="decision-box">
-            <strong>Management recommendation</strong><br>
-            {html.escape(capacity_recommendation)}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    with st.expander("Technical details"):
+    with st.expander("Technical details", expanded=False):
         st.json(
             {
                 "selected_policy": policy_choice,
@@ -1718,7 +1887,6 @@ with capacity_tab:
                 "unique_steps": unique_steps,
                 "maximum_sequential_capacity": maximum_capacity,
                 "investigated_alerts": accepted,
-                "budget_overflow": budget_overflow,
                 "capacity_rejected": rejected,
             }
         )
@@ -1730,6 +1898,10 @@ with capacity_tab:
 
 with workflow_tab:
     st.header("Sequential Workflow")
+    st.caption(
+        "Offline chronological replay that imitates successive decision cycles; "
+        "this is not a deployed real-time transaction stream."
+    )
 
     unique_steps = i(parameters.get("unique_steps"))
 
@@ -2317,29 +2489,38 @@ with sensitivity_tab:
         },
     }
 
-    st.markdown("### Experiments included")
     experiment_names = list(experiment_definitions)
-    for start in range(0, len(experiment_names), 2):
-        row_names = experiment_names[start:start + 2]
-        columns = st.columns(2)
-        for column, experiment_name in zip(columns, row_names):
-            definition = experiment_definitions[experiment_name]
-            with column:
-                st.markdown(
-                    f"""
-                    <div class="definition-card">
-                        <strong>{html.escape(experiment_name)}</strong>
-                        <p><strong>Values tested:</strong><br>{html.escape(definition['display_values'])}</p>
-                        <div class="small"><strong>Purpose:</strong> {html.escape(definition['purpose'])}</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
 
-    st.caption(
-        "All experiments are now executed through one optimized API request. "
-        "The backend reuses scored data and repeated calculations, and completed results are cached."
-    )
+    with st.expander(
+        "What experiments are included?",
+        expanded=False,
+    ):
+        st.caption(
+            "Open this section when you want the methodological detail. "
+            "Each experiment changes one parameter while the others remain fixed."
+        )
+
+        for start in range(0, len(experiment_names), 2):
+            row_names = experiment_names[start:start + 2]
+            columns = st.columns(2)
+            for column, experiment_name in zip(columns, row_names):
+                definition = experiment_definitions[experiment_name]
+                with column:
+                    st.markdown(
+                        f"""
+                        <div class="definition-card">
+                            <strong>{html.escape(experiment_name)}</strong>
+                            <p><strong>Values tested:</strong><br>{html.escape(definition['display_values'])}</p>
+                            <div class="small"><strong>Purpose:</strong> {html.escape(definition['purpose'])}</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+
+        st.caption(
+            "The experiments are executed through one optimized API request. "
+            "The backend reuses scored data and repeated calculations, and completed results are cached."
+        )
 
     run_sensitivity = st.button(
         "Run all sensitivity experiments",
@@ -2352,7 +2533,10 @@ with sensitivity_tab:
             with st.spinner(
                 "Running seven one-at-a-time experiments through the optimized sensitivity endpoint..."
             ):
-                sensitivity_payload = load_sensitivity_data(dict(params))
+                sensitivity_payload = load_sensitivity_data(
+                    dict(params),
+                    cache_schema_version="operational-flow-v2",
+                )
                 results = prepare_sensitivity_results(sensitivity_payload)
 
             missing_experiments = [
@@ -2408,6 +2592,366 @@ with sensitivity_tab:
             )
 
         result_map = saved_analysis["results"]
+
+        missing_flow_metrics = any(
+            row.get("adaptive_candidates") is None
+            or row.get("adaptive_overflow") is None
+            for rows in result_map.values()
+            for row in rows
+        )
+        if missing_flow_metrics:
+            st.warning(
+                "Operational sensitivity metrics are missing from the API response. "
+                "Restart FastAPI with the updated simulation API, then press "
+                "'Run / refresh sensitivity experiments'. Missing values are shown as N/A, "
+                "not as zero."
+            )
+
+        # -----------------------------------------------------
+        # DECISION SCENARIO EXPLORER
+        # -----------------------------------------------------
+        st.markdown("### Decision Scenario Explorer")
+        st.markdown(
+            """
+            <div class="info-box">
+                <strong>Decision question</strong><br>
+                How would changing one operational decision parameter affect fraud coverage,
+                workload and estimated cost? Choose a scenario below. Each comparison uses
+                already-tested sensitivity results and changes only one parameter at a time.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        scenario_choice = st.radio(
+            "Scenario to explore",
+            ["Analyst capacity", "Adaptive budget multiplier"],
+            horizontal=True,
+            key="decision_scenario_choice",
+        )
+
+        if scenario_choice == "Analyst capacity":
+            scenario_df = pd.DataFrame(result_map.get("Analyst capacity", []))
+
+            if scenario_df.empty:
+                st.info(
+                    "Run the Analyst capacity sensitivity experiment to enable this scenario."
+                )
+            else:
+                scenario_df = scenario_df.sort_values("value").reset_index(drop=True)
+                scenario_values = [int(round(n(value))) for value in scenario_df["value"]]
+                baseline_value = int(alert_budget_per_step)
+
+                current_index = min(
+                    range(len(scenario_values)),
+                    key=lambda index: abs(scenario_values[index] - baseline_value),
+                )
+                alternative_index = min(current_index + 1, len(scenario_values) - 1)
+
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    whatif_policy = st.radio(
+                        "Policy to compare",
+                        ["Adaptive", "Static"],
+                        horizontal=True,
+                        key="capacity_whatif_policy",
+                    )
+                with c2:
+                    current_choice = st.selectbox(
+                        "Current capacity",
+                        scenario_values,
+                        index=current_index,
+                        key="capacity_current",
+                    )
+                with c3:
+                    alternative_choice = st.selectbox(
+                        "Alternative capacity",
+                        scenario_values,
+                        index=alternative_index,
+                        key="capacity_alternative",
+                    )
+
+                current_row = scenario_df.loc[
+                    scenario_df["value"].round().astype(int) == int(current_choice)
+                ].iloc[0]
+                alternative_row = scenario_df.loc[
+                    scenario_df["value"].round().astype(int) == int(alternative_choice)
+                ].iloc[0]
+
+                prefix = "adaptive" if whatif_policy == "Adaptive" else "static"
+                metrics_to_compare = [
+                    ("Candidate alerts", f"{prefix}_candidates", "count"),
+                    ("Investigated alerts", f"{prefix}_investigated", "count"),
+                    ("Frauds detected", f"{prefix}_detected", "count"),
+                    ("Recall", f"{prefix}_recall", "pct"),
+                    ("Estimated operational cost", f"{prefix}_cost", "money"),
+                    ("Suppressed alerts", f"{prefix}_suppressed", "count"),
+                    ("Capacity-rejected alerts", f"{prefix}_overflow", "count"),
+                ]
+
+                records = []
+                for label, column, metric_type in metrics_to_compare:
+                    current_value = n(current_row.get(column))
+                    alternative_value = n(alternative_row.get(column))
+                    difference = alternative_value - current_value
+
+                    if metric_type == "pct":
+                        current_display = pct(current_value)
+                        alternative_display = pct(alternative_value)
+                        change_display = f"{difference * 100:+.1f} pp"
+                    elif metric_type == "money":
+                        current_display = money(current_value)
+                        alternative_display = money(alternative_value)
+                        if difference < -0.01:
+                            change_display = f"{money(abs(difference))} lower"
+                        elif difference > 0.01:
+                            change_display = f"{money(difference)} higher"
+                        else:
+                            change_display = "No change"
+                    else:
+                        raw_current = current_row.get(column)
+                        raw_alternative = alternative_row.get(column)
+                        if (
+                            raw_current is None
+                            or raw_alternative is None
+                            or pd.isna(raw_current)
+                            or pd.isna(raw_alternative)
+                        ):
+                            current_display = "N/A"
+                            alternative_display = "N/A"
+                            change_display = "N/A"
+                        else:
+                            current_display = f"{int(round(current_value)):,}"
+                            alternative_display = f"{int(round(alternative_value)):,}"
+                            change_display = f"{int(round(difference)):+,}"
+
+                    records.append(
+                        {
+                            "Outcome": label,
+                            f"Current ({int(current_choice)}/step)": current_display,
+                            f"Alternative ({int(alternative_choice)}/step)": alternative_display,
+                            "Change": change_display,
+                        }
+                    )
+
+                st.dataframe(pd.DataFrame(records), width="stretch", hide_index=True)
+
+                recall_change = (
+                    n(alternative_row.get(f"{prefix}_recall"))
+                    - n(current_row.get(f"{prefix}_recall"))
+                )
+                cost_change = (
+                    n(alternative_row.get(f"{prefix}_cost"))
+                    - n(current_row.get(f"{prefix}_cost"))
+                )
+                current_overflow = optional_i(
+                    current_row.get(f"{prefix}_overflow")
+                )
+                alternative_overflow = optional_i(
+                    alternative_row.get(f"{prefix}_overflow")
+                )
+                overflow_change = (
+                    alternative_overflow - current_overflow
+                    if current_overflow is not None and alternative_overflow is not None
+                    else None
+                )
+
+                parts = []
+                if recall_change > 1e-9:
+                    parts.append(
+                        f"recall improves by {recall_change * 100:.1f} percentage points"
+                    )
+                elif recall_change < -1e-9:
+                    parts.append(
+                        f"recall decreases by {abs(recall_change) * 100:.1f} percentage points"
+                    )
+                else:
+                    parts.append("recall is unchanged")
+
+                if cost_change < -0.01:
+                    parts.append(
+                        f"estimated operational cost falls by {money(abs(cost_change))}"
+                    )
+                elif cost_change > 0.01:
+                    parts.append(
+                        f"estimated operational cost rises by {money(cost_change)}"
+                    )
+                else:
+                    parts.append("estimated operational cost is unchanged")
+
+                if overflow_change is not None:
+                    if overflow_change < 0:
+                        parts.append(
+                            f"capacity overflow falls by {abs(overflow_change):,} alerts"
+                        )
+                    elif overflow_change > 0:
+                        parts.append(
+                            f"capacity overflow rises by {overflow_change:,} alerts"
+                        )
+
+                st.markdown(
+                    f"""
+                    <div class="takeaway">
+                        <strong>Decision implication</strong><br>
+                        Changing capacity from <strong>{int(current_choice)}</strong> to
+                        <strong>{int(alternative_choice)}</strong> alerts per step means
+                        {html.escape("; ".join(parts))}.
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+        else:
+            scenario_df = pd.DataFrame(
+                result_map.get("Adaptive budget multiplier", [])
+            )
+
+            if scenario_df.empty:
+                st.info(
+                    "Run the Adaptive budget multiplier sensitivity experiment to enable this scenario."
+                )
+            else:
+                scenario_df = scenario_df.sort_values("value").reset_index(drop=True)
+                scenario_values = [round(n(value), 1) for value in scenario_df["value"]]
+                baseline_value = round(float(budget_multiplier), 1)
+
+                current_index = min(
+                    range(len(scenario_values)),
+                    key=lambda index: abs(scenario_values[index] - baseline_value),
+                )
+                alternative_index = min(current_index + 1, len(scenario_values) - 1)
+
+                c1, c2 = st.columns(2)
+                with c1:
+                    current_choice = st.selectbox(
+                        "Current multiplier",
+                        scenario_values,
+                        index=current_index,
+                        key="multiplier_current",
+                    )
+                with c2:
+                    alternative_choice = st.selectbox(
+                        "Alternative multiplier",
+                        scenario_values,
+                        index=alternative_index,
+                        key="multiplier_alternative",
+                    )
+
+                current_row = scenario_df.loc[
+                    scenario_df["value"].round(1) == round(float(current_choice), 1)
+                ].iloc[0]
+                alternative_row = scenario_df.loc[
+                    scenario_df["value"].round(1) == round(float(alternative_choice), 1)
+                ].iloc[0]
+
+                metrics_to_compare = [
+                    ("Candidate alerts", "adaptive_candidates", "count"),
+                    ("Investigated alerts", "adaptive_investigated", "count"),
+                    ("Frauds detected", "adaptive_detected", "count"),
+                    ("Recall", "adaptive_recall", "pct"),
+                    ("Estimated operational cost", "adaptive_cost", "money"),
+                    ("Capacity-rejected alerts", "adaptive_overflow", "count"),
+                ]
+
+                records = []
+                for label, column, metric_type in metrics_to_compare:
+                    current_value = n(current_row.get(column))
+                    alternative_value = n(alternative_row.get(column))
+                    difference = alternative_value - current_value
+
+                    if metric_type == "pct":
+                        current_display = pct(current_value)
+                        alternative_display = pct(alternative_value)
+                        change_display = f"{difference * 100:+.1f} pp"
+                    elif metric_type == "money":
+                        current_display = money(current_value)
+                        alternative_display = money(alternative_value)
+                        if difference < -0.01:
+                            change_display = f"{money(abs(difference))} lower"
+                        elif difference > 0.01:
+                            change_display = f"{money(difference)} higher"
+                        else:
+                            change_display = "No change"
+                    else:
+                        raw_current = current_row.get(column)
+                        raw_alternative = alternative_row.get(column)
+                        if (
+                            raw_current is None
+                            or raw_alternative is None
+                            or pd.isna(raw_current)
+                            or pd.isna(raw_alternative)
+                        ):
+                            current_display = "N/A"
+                            alternative_display = "N/A"
+                            change_display = "N/A"
+                        else:
+                            current_display = f"{int(round(current_value)):,}"
+                            alternative_display = f"{int(round(alternative_value)):,}"
+                            change_display = f"{int(round(difference)):+,}"
+
+                    records.append(
+                        {
+                            "Outcome": label,
+                            f"Current (x{float(current_choice):.1f})": current_display,
+                            f"Alternative (x{float(alternative_choice):.1f})": alternative_display,
+                            "Change": change_display,
+                        }
+                    )
+
+                st.dataframe(pd.DataFrame(records), width="stretch", hide_index=True)
+
+                st.caption(
+                    "The Adaptive budget multiplier controls the size of the Adaptive candidate-alert "
+                    "budget relative to the Static baseline alert volume. For example, x1.4 permits an "
+                    "Adaptive budget equal to approximately 140% of the Static alert count before the "
+                    "Sequential analyst-capacity constraint is applied."
+                )
+
+                recall_change = (
+                    n(alternative_row.get("adaptive_recall"))
+                    - n(current_row.get("adaptive_recall"))
+                )
+                candidate_change = (
+                    i(alternative_row.get("adaptive_candidates"))
+                    - i(current_row.get("adaptive_candidates"))
+                )
+                cost_change = (
+                    n(alternative_row.get("adaptive_cost"))
+                    - n(current_row.get("adaptive_cost"))
+                )
+
+                if recall_change > 1e-9 and cost_change <= 0.01:
+                    implication = (
+                        f"The broader Adaptive budget adds {candidate_change:+,} candidate alerts, "
+                        f"improves recall by {recall_change * 100:.1f} percentage points and does "
+                        "not increase estimated operational cost."
+                    )
+                elif recall_change > 1e-9:
+                    implication = (
+                        f"The broader Adaptive budget adds {candidate_change:+,} candidate alerts "
+                        f"and improves recall by {recall_change * 100:.1f} percentage points, "
+                        f"but estimated operational cost increases by {money(max(cost_change, 0))}."
+                    )
+                elif candidate_change > 0:
+                    implication = (
+                        f"The broader Adaptive budget adds {candidate_change:+,} candidate alerts "
+                        "without improving recall in this tested scenario, suggesting diminishing returns."
+                    )
+                else:
+                    implication = (
+                        "The two tested multiplier settings produce little operational difference "
+                        "under the current configuration."
+                    )
+
+                st.markdown(
+                    f"""
+                    <div class="takeaway">
+                        <strong>Decision implication</strong><br>
+                        {html.escape(implication)}
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
         def build_plain_finding(frame: pd.DataFrame) -> str:
             adaptive_wins = int((frame["winner"] == "Adaptive").sum())
