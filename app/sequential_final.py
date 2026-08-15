@@ -574,10 +574,14 @@ st.markdown(
     """
     <div class="info-box" style="margin-top:.65rem; margin-bottom:.85rem;">
         <strong>About this prototype</strong><br>
-        <strong>Dataset:</strong> synthetic PaySim mobile-money transactions &nbsp;·&nbsp;
-        <strong>Evaluation:</strong> offline chronological replay &nbsp;·&nbsp;
+        <strong>Dataset:</strong>
+        synthetic <a href="https://www.kaggle.com/datasets/ealaxi/paysim1/data" target="_blank">PaySim mobile-money transactions</a>
+        &nbsp;·&nbsp;
+        <strong>Evaluation:</strong> offline chronological replay
+        &nbsp;·&nbsp;
         <strong>Purpose:</strong> decision-support research, not live payment validation.<br>
         <span class="small">
+            <strong>Dataset source:</strong> Kaggle PaySim dataset.
             It does not process live banking or UPI transactions. Transaction IDs and
             simulated entity identifiers shown in the dashboard do not correspond to real
             customers, cards, accounts or payment identifiers.
