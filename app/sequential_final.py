@@ -817,6 +817,19 @@ with executive_tab:
         unsafe_allow_html=True,
     )
 
+    st.info(
+        """
+        **Quick guide**
+
+        Start with the **Executive Summary** for the main Static vs Adaptive result.  
+        Use **Analyst Capacity** to see which alerts enter the investigation queue and why.  
+        Open **Sequential Workflow** to understand how transactions are processed over time.  
+        Use **Monitoring** to inspect changes across the replay, and **Sensitivity Analysis** to test how different operating assumptions affect the results.
+
+        **Tip:** When comparing scenarios, change one setting at a time so that the effect of each operational assumption remains clear.
+        """
+    )
+
     total_frauds = i(
         adaptive_batch.get(
             "total_frauds",
@@ -851,6 +864,9 @@ with executive_tab:
     sequential_cost_saving = static_seq_total_cost - adaptive_seq_total_cost
     sequential_recall_gain = adaptive_seq_recall - static_seq_recall
     seq_fraud_gain = adaptive_seq_frauds - static_seq_frauds
+
+    
+    
 
     # --------------------------------------------------------
     # Overall outcome — compact layout retained from the screen
