@@ -9,3 +9,5 @@ pydantic
 PyYAML
 requests
 matplotlib
+httpx
+pytest
