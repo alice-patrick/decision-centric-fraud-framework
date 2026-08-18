@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 import html
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -10,6 +12,10 @@ import pandas as pd
 import requests
 import streamlit as st
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from app.dashboard.logic import (
     get_summary,
     i,
@@ -18,6 +24,7 @@ from app.dashboard.logic import (
     optional_i,
     trend_label,
 )
+
 
 API_BASE_URL = os.getenv(
     "API_BASE_URL",
@@ -271,9 +278,6 @@ st.markdown(
 
 
 
-
-
-
 def money(value: Any) -> str:
     return f"€{n(value):,.2f}"
 
@@ -405,7 +409,21 @@ def arrow() -> None:
 
 
 
+    result = frame.copy().rename(
+        columns={
+            "monitoring_window": "window",
+            "selected_alerts": "accepted_alerts",
+            "suppressed_alerts": "suppressed",
+            "capacity_rejected_alerts": "capacity_rejected",
+            "policy_candidate_alerts": "candidate_alerts",
+            "total_operational_cost": "operational_cost",
+        }
+    )
 
+    if "window" in result.columns:
+        result = result.sort_values("window")
+
+    return result
 
 
 @st.cache_data(ttl=60, show_spinner=False)
