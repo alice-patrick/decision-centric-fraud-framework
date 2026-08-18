@@ -407,26 +407,6 @@ def arrow() -> None:
         unsafe_allow_html=True,
     )
 
-
-
-    result = frame.copy().rename(
-        columns={
-            "monitoring_window": "window",
-            "selected_alerts": "accepted_alerts",
-            "suppressed_alerts": "suppressed",
-            "capacity_rejected_alerts": "capacity_rejected",
-            "policy_candidate_alerts": "candidate_alerts",
-            "total_operational_cost": "operational_cost",
-        }
-    )
-
-    if "window" in result.columns:
-        result = result.sort_values("window")
-
-    return result
-
-
-@st.cache_data(ttl=60, show_spinner=False)
 def load_data(params: dict[str, Any]) -> dict[str, Any]:
     response = requests.get(
         f"{API_BASE_URL}/{SIMULATION_ENDPOINT}",
