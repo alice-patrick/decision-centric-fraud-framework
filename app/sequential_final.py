@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 import html
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -10,6 +12,10 @@ import pandas as pd
 import requests
 import streamlit as st
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from app.dashboard.logic import (
     get_summary,
     i,
@@ -18,6 +24,7 @@ from app.dashboard.logic import (
     optional_i,
     trend_label,
 )
+
 
 API_BASE_URL = os.getenv(
     "API_BASE_URL",
@@ -271,9 +278,6 @@ st.markdown(
 
 
 
-
-
-
 def money(value: Any) -> str:
     return f"€{n(value):,.2f}"
 
@@ -403,12 +407,6 @@ def arrow() -> None:
         unsafe_allow_html=True,
     )
 
-
-
-
-
-
-@st.cache_data(ttl=60, show_spinner=False)
 def load_data(params: dict[str, Any]) -> dict[str, Any]:
     response = requests.get(
         f"{API_BASE_URL}/{SIMULATION_ENDPOINT}",
@@ -3355,79 +3353,6 @@ with sensitivity_tab:
         selected_definition = experiment_definitions[selected_experiment]
         selected_frame = pd.DataFrame(result_map[selected_experiment]).sort_values("value")
 
-        st.markdown(
-            f"""
-            <div class="question-card">
-                <strong>{html.escape(selected_experiment)}</strong><br>
-                <strong>Values tested:</strong> {html.escape(selected_definition['display_values'])}<br>
-                <strong>Question answered:</strong> {html.escape(selected_definition['purpose'])}
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        chart_frame = selected_frame[["value", "static_recall", "adaptive_recall"]].copy()
-        chart_frame["static_recall"] = chart_frame["static_recall"] * 100
-        chart_frame["adaptive_recall"] = chart_frame["adaptive_recall"] * 100
-        chart_frame = chart_frame.set_index("value").rename(
-            columns={
-                "static_recall": "Static recall",
-                "adaptive_recall": "Adaptive recall",
-            }
-        )
-
-        x_axis_labels = {
-            "Transaction volume": "Transaction volume (transactions)",
-            "Analyst capacity": "Analyst capacity (alerts per operational step)",
-            "Investigation cost": "Investigation cost (€ per investigation)",
-            "Suppression window": "Suppression window (operational steps)",
-            "Adaptive budget multiplier": "Adaptive budget multiplier",
-            "Static threshold": "Static fraud threshold",
-            "Minimum Adaptive threshold": "Minimum Adaptive fraud threshold",
-        }
-
-        st.line_chart(
-            chart_frame,
-            x_label=x_axis_labels[selected_experiment],
-            y_label="Fraud recall (%)",
-            width="stretch",
-        )
-
-        detail_display = selected_frame[[
-            "value",
-            "static_recall",
-            "adaptive_recall",
-            "recall_difference",
-            "static_cost",
-            "adaptive_cost",
-            "adaptive_cost_saving",
-            "winner",
-        ]].copy()
-        detail_display["static_recall"] = detail_display["static_recall"].map(pct)
-        detail_display["adaptive_recall"] = detail_display["adaptive_recall"].map(pct)
-        detail_display["recall_difference"] = detail_display["recall_difference"].map(
-            lambda value: f"{value:+.2%}"
-        )
-        for cost_column in ["static_cost", "adaptive_cost", "adaptive_cost_saving"]:
-            detail_display[cost_column] = detail_display[cost_column].map(money)
-        detail_display = detail_display.rename(
-            columns={
-                "value": "Tested value",
-                "static_recall": "Static recall",
-                "adaptive_recall": "Adaptive recall",
-                "recall_difference": "Adaptive recall difference",
-                "static_cost": "Static estimated operational cost (€)",
-                "adaptive_cost": "Adaptive estimated operational cost (€)",
-                "adaptive_cost_saving": "Estimated Adaptive cost saving (€)",
-                "winner": "Preferred policy",
-            }
-        )
-        st.dataframe(detail_display, width="stretch", hide_index=True)
-        st.caption(
-            "Sensitivity cost values are simulation estimates. They are used to compare "
-            "policies under identical assumptions rather than to claim observed banking losses."
-        )
-
         selected_interpretations = {
             "Transaction volume": (
                 "The effect of policy choice changes with workload size. At smaller transaction volumes, "
@@ -3472,9 +3397,220 @@ with sensitivity_tab:
 
         st.markdown(
             f"""
-            <div class="chart-conclusion">
+            <div class="chart-conclusion" style="
+                margin-top: .55rem;
+                margin-bottom: .85rem;
+            ">
                 <strong>Drill-down interpretation</strong><br>
                 {html.escape(selected_interpretation)}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.markdown(
+            f"""
+            <div class="question-card">
+                <strong>{html.escape(selected_experiment)}</strong><br>
+                <strong>Values tested:</strong> {html.escape(selected_definition['display_values'])}<br>
+                <strong>Question answered:</strong> {html.escape(selected_definition['purpose'])}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        chart_frame = selected_frame[["value", "static_recall", "adaptive_recall"]].copy()
+        chart_frame["static_recall"] = chart_frame["static_recall"] * 100
+        chart_frame["adaptive_recall"] = chart_frame["adaptive_recall"] * 100
+        chart_frame = chart_frame.set_index("value").rename(
+            columns={
+                "static_recall": "Static recall",
+                "adaptive_recall": "Adaptive recall",
+            }
+        )
+
+        x_axis_labels = {
+            "Transaction volume": "Transaction volume (transactions)",
+            "Analyst capacity": "Analyst capacity (alerts per operational step)",
+            "Investigation cost": "Investigation cost (€ per investigation)",
+            "Suppression window": "Suppression window (operational steps)",
+            "Adaptive budget multiplier": "Adaptive budget multiplier",
+            "Static threshold": "Static fraud threshold",
+            "Minimum Adaptive threshold": "Minimum Adaptive fraud threshold",
+        }
+
+        st.line_chart(
+            chart_frame,
+            x_label=x_axis_labels[selected_experiment],
+            y_label="Fraud recall (%)",
+            width="stretch",
+        )
+
+        # -----------------------------------------------------
+        # CHART KEY POINTS
+        # -----------------------------------------------------
+        best_recall_row = selected_frame.loc[
+            selected_frame["adaptive_recall"].idxmax()
+        ]
+        largest_gap_row = selected_frame.loc[
+            selected_frame["recall_difference"].abs().idxmax()
+        ]
+
+        first_recall_gap = float(
+            selected_frame.iloc[0]["recall_difference"]
+        )
+        last_recall_gap = float(
+            selected_frame.iloc[-1]["recall_difference"]
+        )
+
+        if last_recall_gap > first_recall_gap + 1e-9:
+            gap_direction = (
+                "The Adaptive recall advantage becomes stronger across the tested range."
+            )
+        elif last_recall_gap < first_recall_gap - 1e-9:
+            gap_direction = (
+                "The Adaptive recall advantage becomes weaker across the tested range."
+            )
+        else:
+            gap_direction = (
+                "The relative recall difference is broadly unchanged from the first to the last tested value."
+            )
+
+        chart_key_points = [
+            (
+                f"Highest Adaptive recall: "
+                f"{n(best_recall_row['adaptive_recall']):.1%} "
+                f"at {best_recall_row['value']:g}."
+            ),
+            (
+                f"Largest recall separation: "
+                f"{n(largest_gap_row['recall_difference']):+.1%} "
+                f"at {largest_gap_row['value']:g}."
+            ),
+            gap_direction,
+        ]
+
+        st.markdown(
+            f"""
+            <div class="compact-note" style="
+                border-left: 3px solid #1976d2;
+                background: rgba(25,136,229,.045);
+                padding: .7rem .85rem;
+                margin-top: .45rem;
+                margin-bottom: .8rem;
+                font-size: .92rem;
+            ">
+                <strong>Chart insights</strong><br>
+                • {html.escape(chart_key_points[0])}<br>
+                • {html.escape(chart_key_points[1])}<br>
+                • {html.escape(chart_key_points[2])}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        detail_display = selected_frame[[
+            "value",
+            "static_recall",
+            "adaptive_recall",
+            "recall_difference",
+            "static_cost",
+            "adaptive_cost",
+            "adaptive_cost_saving",
+            "winner",
+        ]].copy()
+        detail_display["static_recall"] = detail_display["static_recall"].map(pct)
+        detail_display["adaptive_recall"] = detail_display["adaptive_recall"].map(pct)
+        detail_display["recall_difference"] = detail_display["recall_difference"].map(
+            lambda value: f"{value:+.2%}"
+        )
+        for cost_column in ["static_cost", "adaptive_cost", "adaptive_cost_saving"]:
+            detail_display[cost_column] = detail_display[cost_column].map(money)
+        detail_display = detail_display.rename(
+            columns={
+                "value": "Tested value",
+                "static_recall": "Static recall",
+                "adaptive_recall": "Adaptive recall",
+                "recall_difference": "Adaptive recall difference",
+                "static_cost": "Static estimated operational cost (€)",
+                "adaptive_cost": "Adaptive estimated operational cost (€)",
+                "adaptive_cost_saving": "Estimated Adaptive cost saving (€)",
+                "winner": "Preferred policy",
+            }
+        )
+        st.dataframe(detail_display, width="stretch", hide_index=True)
+        st.caption(
+            "Sensitivity cost values are simulation estimates. They are used to compare "
+            "policies under identical assumptions rather than to claim observed banking losses."
+        )
+
+        # -----------------------------------------------------
+        # TABLE KEY POINTS
+        # -----------------------------------------------------
+        winner_counts = (
+            selected_frame["winner"]
+            .fillna("Tie")
+            .value_counts()
+            .to_dict()
+        )
+
+        adaptive_wins = int(winner_counts.get("Adaptive", 0))
+        static_wins = int(winner_counts.get("Static", 0))
+        ties = int(winner_counts.get("Tie", 0))
+
+        max_saving_row = selected_frame.loc[
+            selected_frame["adaptive_cost_saving"].idxmax()
+        ]
+        min_saving_row = selected_frame.loc[
+            selected_frame["adaptive_cost_saving"].idxmin()
+        ]
+
+        if adaptive_wins > static_wins:
+            policy_pattern = (
+                f"Adaptive is preferred more often "
+                f"({adaptive_wins} Adaptive vs {static_wins} Static, with {ties} tie(s))."
+            )
+        elif static_wins > adaptive_wins:
+            policy_pattern = (
+                f"Static is preferred more often "
+                f"({static_wins} Static vs {adaptive_wins} Adaptive, with {ties} tie(s))."
+            )
+        else:
+            policy_pattern = (
+                f"Neither policy dominates by frequency "
+                f"({adaptive_wins} Adaptive, {static_wins} Static, {ties} tie(s))."
+            )
+
+        strongest_cost_point = (
+            f"Best estimated Adaptive cost saving: "
+            f"{money(max_saving_row['adaptive_cost_saving'])} "
+            f"at {max_saving_row['value']:g}."
+        )
+
+        if n(min_saving_row["adaptive_cost_saving"]) < 0:
+            weakest_cost_point = (
+                f"Largest estimated Adaptive cost disadvantage: "
+                f"{money(abs(n(min_saving_row['adaptive_cost_saving'])))} "
+                f"at {min_saving_row['value']:g}."
+            )
+        else:
+            weakest_cost_point = (
+                f"Adaptive does not show an estimated cost disadvantage in the tested values; "
+                f"its smallest saving is {money(min_saving_row['adaptive_cost_saving'])}."
+            )
+
+        st.markdown(
+            f"""
+            <div class="takeaway" style="
+                padding: .8rem .9rem;
+                margin-top: .55rem;
+                margin-bottom: .8rem;
+                font-size: .94rem;
+            ">
+                <strong>Table conclusions</strong><br>
+                • {html.escape(policy_pattern)}<br>
+                • {html.escape(strongest_cost_point)}<br>
+                • {html.escape(weakest_cost_point)}
             </div>
             """,
             unsafe_allow_html=True,
