@@ -470,6 +470,7 @@ Investigated alerts
 Suppressed alerts
 +
 Capacity-rejected alerts
+```
 
 The final automated test suite is organised as follows:
 
