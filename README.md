@@ -436,20 +436,71 @@ The deployment should therefore not be interpreted as evidence of production ban
 
 ## Testing
 
-The repository contains tests for core application and decision-layer behaviour.
+The repository includes an automated `pytest` test suite covering the main decision-support, sequential-processing, API, and dashboard-logic components of the final prototype.
+
+The final regression suite contains **88 automated tests**, all of which pass successfully.
 
 The testing scope includes:
 
-- Preprocessing
-- Model loading
-- Threshold logic
-- Cost logic
-- Suppression
-- Decision-engine behaviour
-- API responses
-- Invalid-input handling
+- Static and Adaptive decision logic
+- Score-, benefit-, hybrid-, and risk-zone ranking behaviour
+- Expected fraud-loss, investigation-cost, and expected-benefit calculations
+- Risk-zone and alert-budget constraints
+- Invalid-parameter handling
+- Analyst-capacity enforcement
+- Prioritised analyst-queue ordering
+- Chronological sequential processing
+- Repeat-alert suppression
+- Capacity-rejected alert handling
+- Sequential accounting consistency
+- Investigation-cost and total-operational-cost consistency
+- Operating-curve and budget-multiplier behaviour
+- REST API responses and validation
+- Sequential API scenario outputs
+- Dashboard monitoring-data transformations
+- Dashboard trend-classification logic
 
-The sequential backend also validates consistency between candidate, investigated, suppressed, and capacity-rejected alert counts.
+The sequential backend also validates the following accounting relationship:
+
+```text
+Candidate alerts
+=
+Investigated alerts
++
+Suppressed alerts
++
+Capacity-rejected alerts
+
+The final automated test suite is organised as follows:
+
+| Test area | Tests |
+| --- | ---: |
+| Decision logic | 16 |
+| Analyst queue and capacity | 10 |
+| Sequential simulation | 12 |
+| Operating-curve logic | 19 |
+| REST API integration | 14 |
+| Dashboard logic | 17 |
+| **Total** | **88** |
+
+The complete test suite can be executed with:
+
+```bash
+py -m pytest app/tests -q
+```
+
+The latest full regression run completed successfully with:
+
+```text
+88 passed
+```
+
+These tests verify implementation consistency within the research prototype. They do not constitute evidence of production readiness or external validity on real banking data.
+
+The prototype uses the synthetic PaySim dataset and offline chronological replay for experimental evaluation. The automated tests therefore focus on software correctness, decision-logic consistency, API behaviour, and reproducibility within the implemented research environment.
+
+For additional implementation details, see the source code and test files in the repository.
+
 
 ## Limitations
 
