@@ -1934,6 +1934,422 @@ with workflow_tab:
         unsafe_allow_html=True,
     )
 
+    with st.expander(
+        "See the full end-to-end decision flow",
+        expanded=False,
+    ):
+        st.caption(
+            "The same seven stages shown above are expanded below. Each stage shows the "
+            "information it receives, what the system does with it, and what moves forward "
+            "to the next stage."
+        )
+
+        # -----------------------------------------------------
+        # STEP 1
+        # -----------------------------------------------------
+        with st.container(border=True):
+            st.markdown("### 1 · Transactions arrive")
+            st.caption("Historical PaySim transactions are replayed chronologically.")
+
+            c1, c2, c3 = st.columns([1.1, 1.6, 1.1])
+
+            with c1:
+                st.markdown(
+                    """
+                    **Inputs**
+
+                    `step`  
+                    `type`  
+                    `amount`  
+                    `oldbalanceOrg`  
+                    `newbalanceOrig`  
+                    `oldbalanceDest`  
+                    `newbalanceDest`
+                    """
+                )
+
+            with c2:
+                st.markdown(
+                    """
+                    **What happens**
+
+                    The system reads each stored transaction in PaySim `step` order.
+
+                    These fields describe:
+                    - **when** the transaction appears,
+                    - **what type** of transaction it is,
+                    - **how much money** moves,
+                    - and how the **sender and receiver balances** change.
+                    """
+                )
+
+            with c3:
+                st.markdown(
+                    """
+                    **Output**
+
+                    A transaction record ready for the ML pipeline.
+                    """
+                )
+
+        st.markdown("↓")
+
+        # -----------------------------------------------------
+        # STEP 2
+        # -----------------------------------------------------
+        with st.container(border=True):
+            st.markdown("### 2 · Fraud risk is calculated")
+            st.caption("The fixed ML model converts transaction information into a fraud probability.")
+
+            c1, c2, c3 = st.columns([1.1, 1.6, 1.1])
+
+            with c1:
+                st.markdown(
+                    """
+                    **Inputs**
+
+                    Original transaction fields
+
+                    **+ engineered features**
+
+                    `log_amount`  
+                    `origin_balance_error`  
+                    `destination_balance_error`  
+                    `abs_origin_balance_error`  
+                    `abs_destination_balance_error`
+                    """
+                )
+
+            with c2:
+                st.markdown(
+                    """
+                    **What happens**
+
+                    Feature engineering creates additional variables from the original data.
+
+                    - `log_amount` compresses very large transaction values.
+                    - Balance-error features measure whether recorded sender/receiver balances
+                      behave as expected after the transaction.
+                    - Absolute balance-error features keep the **size** of that inconsistency,
+                      regardless of direction.
+
+                    The ML pipeline uses **12 inputs in total**:
+                    **11 numerical features + 1 categorical feature (`type`)**.
+
+                    The trained Logistic Regression model then produces `fraud_score`.
+                    """
+                )
+
+            with c3:
+                st.markdown(
+                    """
+                    **Output**
+
+                    **Fraud Risk**
+
+                    Example:
+
+                    `0.42 = 42% estimated probability of fraud`
+                    """
+                )
+
+        st.markdown("↓")
+
+        # -----------------------------------------------------
+        # STEP 3
+        # -----------------------------------------------------
+        with st.container(border=True):
+            st.markdown("### 3 · Alerts are created")
+            st.caption("Static and Adaptive use different rules to turn Fraud Risk into alerts.")
+
+            c1, c2, c3 = st.columns([1.1, 1.7, 1.1])
+
+            with c1:
+                st.markdown(
+                    f"""
+                    **Inputs**
+
+                    Fraud Risk
+
+                    Amount
+
+                    Investigation cost
+
+                    False-Negative Factor
+
+                    Static threshold:
+                    **{float(static_threshold):.2f}**
+
+                    Adaptive floor:
+                    **{float(risk_zone_floor):.2f}**
+                    """
+                )
+
+            with c2:
+                st.markdown(
+                    f"""
+                    **What happens**
+
+                    **Static**
+
+                    A transaction becomes an alert when:
+
+                    `Fraud Risk ≥ {float(static_threshold):.2f}`
+
+                    **Adaptive**
+
+                    A transaction must satisfy both:
+
+                    `Fraud Risk ≥ {float(risk_zone_floor):.2f}`
+
+                    **and**
+
+                    `Expected Benefit > 0`
+
+                    The cost-aware calculation is:
+
+                    `Expected Fraud Loss = Fraud Risk × Amount × False-Negative Factor`
+
+                    `Expected Investigation Cost = (1 − Fraud Risk) × Investigation Cost`
+
+                    `Expected Benefit = Expected Fraud Loss − Expected Investigation Cost`
+
+                    For the current `risk_zone` policy:
+
+                    **Rank Score = Expected Benefit**
+
+                    Eligible Adaptive alerts are ordered from highest to lowest Rank Score.
+
+                    The **Budget Multiplier** then limits how many of those ordered alerts may
+                    be kept. It does not change Fraud Risk or Rank Score.
+                    """
+                )
+
+            with c3:
+                st.markdown(
+                    """
+                    **Output**
+
+                    Static alerts
+
+                    **or**
+
+                    Adaptive alerts ordered by operational priority
+                    """
+                )
+
+        st.markdown("↓")
+
+        # -----------------------------------------------------
+        # STEP 4
+        # -----------------------------------------------------
+        with st.container(border=True):
+            st.markdown("### 4 · Repeated alerts may be suppressed")
+            st.caption("Duplicate-like alerts can be filtered before analyst capacity is used.")
+
+            c1, c2, c3 = st.columns([1.1, 1.6, 1.1])
+
+            with c1:
+                st.markdown(
+                    """
+                    **Inputs**
+
+                    Alerts from the selected policy
+
+                    Simulation entity key
+
+                    Suppression window
+                    """
+                )
+
+            with c2:
+                st.markdown(
+                    """
+                    **What happens**
+
+                    The system checks whether a similar alert for the same simulated entity
+                    has already been accepted within the configured suppression window.
+
+                    If yes, the repeated alert can be marked as **suppressed**.
+
+                    This prevents analyst capacity from being consumed repeatedly by the same
+                    simulated case in a short period.
+                    """
+                )
+
+            with c3:
+                st.markdown(
+                    """
+                    **Output**
+
+                    Alerts remaining after repeat filtering
+                    """
+                )
+
+        st.markdown("↓")
+
+        # -----------------------------------------------------
+        # STEP 5
+        # -----------------------------------------------------
+        with st.container(border=True):
+            st.markdown("### 5 · Alerts are prioritised")
+            st.caption("Higher operational priority is considered first.")
+
+            c1, c2, c3 = st.columns([1.1, 1.6, 1.1])
+
+            with c1:
+                st.markdown(
+                    """
+                    **Inputs**
+
+                    Eligible alerts
+
+                    Rank Score
+                    """
+                )
+
+            with c2:
+                st.markdown(
+                    """
+                    **What happens**
+
+                    Alerts are sorted by **Rank Score from highest to lowest**.
+
+                    A higher Rank Score means the system estimates greater operational value
+                    from investigating that alert.
+
+                    There is **no fixed Rank Score threshold** such as `Rank Score ≥ 25`.
+
+                    Rank Score determines **order**. The alert budget determines **how many**
+                    ordered alerts may be kept.
+                    """
+                )
+
+            with c3:
+                st.markdown(
+                    """
+                    **Output**
+
+                    Prioritised alert queue
+                    """
+                )
+
+        st.markdown("↓")
+
+        # -----------------------------------------------------
+        # STEP 6
+        # -----------------------------------------------------
+        with st.container(border=True):
+            st.markdown("### 6 · Analyst capacity is applied")
+            st.caption("Only a limited number of alerts can enter investigation in each step.")
+
+            c1, c2, c3 = st.columns([1.1, 1.6, 1.1])
+
+            with c1:
+                st.markdown(
+                    f"""
+                    **Inputs**
+
+                    Prioritised alerts
+
+                    Per-step capacity:
+                    **{int(alert_budget_per_step)}**
+                    """
+                )
+
+            with c2:
+                st.markdown(
+                    f"""
+                    **What happens**
+
+                    The replay can investigate at most
+                    **{int(alert_budget_per_step)} alerts in each operational step**.
+
+                    Higher-priority alerts enter first.
+
+                    Once capacity is full, remaining eligible alerts are marked as
+                    **capacity rejected** for that step.
+
+                    Candidate selection and analyst capacity are separate:
+                    the policy decides which alerts exist; analyst capacity decides how many
+                    can actually be investigated.
+                    """
+                )
+
+            with c3:
+                st.markdown(
+                    """
+                    **Output**
+
+                    Investigated alerts
+
+                    Suppressed alerts
+
+                    Capacity-rejected alerts
+                    """
+                )
+
+        st.markdown("↓")
+
+        # -----------------------------------------------------
+        # STEP 7
+        # -----------------------------------------------------
+        with st.container(border=True):
+            st.markdown("### 7 · Outcomes are evaluated")
+            st.caption("Investigation decisions are compared retrospectively with PaySim fraud labels.")
+
+            c1, c2, c3 = st.columns([1.1, 1.6, 1.1])
+
+            with c1:
+                st.markdown(
+                    """
+                    **Inputs**
+
+                    Investigation decisions
+
+                    PaySim `isFraud`
+
+                    Transaction amount
+
+                    Investigation cost
+                    """
+                )
+
+            with c2:
+                st.markdown(
+                    """
+                    **What happens**
+
+                    The system compares investigated and non-investigated transactions with
+                    the retrospective PaySim fraud label.
+
+                    It then calculates:
+                    - frauds detected,
+                    - frauds missed,
+                    - precision,
+                    - recall,
+                    - investigation cost,
+                    - missed-fraud cost,
+                    - total estimated operational cost.
+                    """
+                )
+
+            with c3:
+                st.markdown(
+                    """
+                    **Output**
+
+                    Operational performance metrics used to compare Static and Adaptive
+                    """
+                )
+
+        st.info(
+            "The key separation is: the ML layer converts transaction information into "
+            "Fraud Risk. The decision layer then turns that prediction into alerts, orders "
+            "them by operational priority, applies the alert budget, suppression and analyst "
+            "capacity, and finally evaluates what was actually investigated."
+        )
+
     # --------------------------------------------------------
     # 2. OPERATIONAL STEP EXPLORER
     # --------------------------------------------------------
