@@ -353,6 +353,7 @@ def build_operational_step_breakdown(
 
     required_columns = [
         "step",
+        "isFraud",
         "policy_alert_candidate",
         "suppression_applied",
         "selected_alert",
@@ -374,6 +375,17 @@ def build_operational_step_breakdown(
     records: list[dict[str, Any]] = []
 
     for step_value, step_df in df.groupby("step", sort=True):
+        transactions_processed = int(len(step_df))
+        frauds_detected = int(
+            (
+                step_df["selected_alert"].fillna(False).astype(bool)
+                & step_df["isFraud"].fillna(0).astype(int).eq(1)
+            ).sum()
+        )
+        frauds_present = int(
+            step_df["isFraud"].fillna(0).astype(int).eq(1).sum()
+        )
+
         candidate_alerts = int(
             step_df["policy_alert_candidate"]
             .fillna(False)
@@ -418,6 +430,9 @@ def build_operational_step_breakdown(
         records.append(
             {
                 "step": int(step_value),
+                "transactions_processed": transactions_processed,
+                "frauds_present": frauds_present,
+                "frauds_detected": frauds_detected,
                 "candidate_alerts": candidate_alerts,
                 "suppressed_alerts": suppressed_alerts,
                 "eligible_alerts": eligible_alerts,

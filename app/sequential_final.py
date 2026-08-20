@@ -417,6 +417,19 @@ def load_data(params: dict[str, Any]) -> dict[str, Any]:
     return response.json()
 
 
+def load_step_explorer_data(params: dict[str, Any]) -> dict[str, Any]:
+    """
+    Run a one-off Step Explorer scenario without changing the main dashboard state.
+    """
+    response = requests.get(
+        f"{API_BASE_URL}/{SIMULATION_ENDPOINT}",
+        params=params,
+        timeout=180,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_sensitivity_data(
     base_params: dict[str, Any],
@@ -1880,15 +1893,15 @@ with capacity_tab:
 with workflow_tab:
     st.header("Sequential Workflow")
     st.caption(
-        "Offline chronological replay that imitates successive decision cycles; "
-        "this is not a deployed real-time transaction stream."
+        "Offline chronological replay of successive operational decision cycles. "
+        "Use the explorer below to inspect what happened inside an individual PaySim step."
     )
 
     unique_steps = i(parameters.get("unique_steps"))
 
-
-
-    # Process first, as requested.
+    # --------------------------------------------------------
+    # 1. HOW THE SEQUENTIAL PROCESS WORKS
+    # --------------------------------------------------------
     st.markdown("### Seven-step decision process")
 
     compact_steps = [
@@ -1912,20 +1925,1056 @@ with workflow_tab:
             <strong>Key interpretation</strong><br>
             The selected replay contains <strong>{unique_steps}</strong> chronological
             PaySim steps. Ranking, suppression and the limit of
-            <strong>{int(alert_budget_per_step)}</strong> alerts are applied separately
-            within each step.
+            <strong>{int(alert_budget_per_step)}</strong> alerts are applied independently
+            inside every step.
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    with st.expander("Methodological context: Batch vs Sequential", expanded=False):
+    # --------------------------------------------------------
+    # 2. OPERATIONAL STEP EXPLORER
+    # --------------------------------------------------------
+    st.markdown("### Operational Step Explorer")
+    st.caption(
+        "Select a policy and a chronological step to inspect how transactions "
+        "became candidate alerts, how capacity affected the queue and which frauds "
+        "were ultimately investigated."
+    )
+
+    explorer_policy = st.radio(
+        "Policy to replay",
+        ["Static", "Adaptive"],
+        horizontal=True,
+        key="workflow_explorer_policy",
+    )
+
+    baseline_multiplier = float(budget_multiplier)
+    explorer_multiplier = baseline_multiplier
+    explorer_data = data
+
+    if explorer_policy == "Adaptive":
+        st.markdown("#### Adaptive scenario control")
+        st.caption(
+            "This control affects only the Sequential Step Explorer. "
+            "The main dashboard configuration in the sidebar is unchanged."
+        )
+
+        explorer_multiplier = st.slider(
+            "Adaptive budget multiplier",
+            min_value=1.0,
+            max_value=2.0,
+            value=float(baseline_multiplier),
+            step=0.1,
+            key="workflow_explorer_multiplier",
+            help=(
+                "Controls how broadly the Adaptive policy may expand its candidate-alert "
+                "budget relative to the Static baseline alert volume. "
+                "It does not change analyst capacity."
+            ),
+        )
+
+        st.caption(
+            "The multiplier changes the Adaptive policy-level alert budget; "
+            "it does not change analyst capacity. Open the explanations below "
+            "for the exact calculation and selected-step effect."
+        )
+
+        if abs(explorer_multiplier - baseline_multiplier) > 1e-9:
+            explorer_params = dict(params)
+            explorer_params["budget_multiplier"] = float(explorer_multiplier)
+
+            try:
+                with st.spinner(
+                    f"Replaying Adaptive scenario at {explorer_multiplier:.1f}×..."
+                ):
+                    explorer_data = load_step_explorer_data(explorer_params)
+            except requests.exceptions.RequestException as exc:
+                st.error(
+                    "The Adaptive Step Explorer scenario could not be recalculated. "
+                    "The baseline dashboard results are shown instead."
+                )
+                st.exception(exc)
+                explorer_data = data
+
+    explorer_payload = (
+        explorer_data.get("static_sequential", {})
+        if explorer_policy == "Static"
+        else explorer_data.get("adaptive_sequential", {})
+    )
+
+    baseline_explorer_payload = (
+        data.get("static_sequential", {})
+        if explorer_policy == "Static"
+        else data.get("adaptive_sequential", {})
+    )
+
+    explorer_steps = pd.DataFrame(
+        explorer_payload.get("operational_steps", [])
+    )
+    baseline_explorer_steps = pd.DataFrame(
+        baseline_explorer_payload.get("operational_steps", [])
+    )
+
+    if explorer_steps.empty:
+        st.info(
+            "Operational-step data are not available. Restart FastAPI after replacing "
+            "the Sequential simulation file with the Step Explorer version."
+        )
+    else:
+        explorer_steps = (
+            explorer_steps
+            .sort_values("step")
+            .reset_index(drop=True)
+        )
+
+        available_step_values = [
+            i(value)
+            for value in explorer_steps["step"].dropna().tolist()
+        ]
+
+        selected_step = st.select_slider(
+            "Operational step",
+            options=available_step_values,
+            value=available_step_values[0],
+            key=f"workflow_step_selector_{explorer_policy}",
+            help=(
+                "A PaySim step is one chronological grouping used as an operational "
+                "decision cycle. It is not converted into a fixed real-world duration."
+            ),
+        )
+
+        selected_step_rows = explorer_steps[
+            pd.to_numeric(
+                explorer_steps["step"],
+                errors="coerce",
+            ).fillna(-1).astype(int).eq(int(selected_step))
+        ]
+
+        if selected_step_rows.empty:
+            st.warning("The selected operational step could not be found.")
+        else:
+            step_row = selected_step_rows.iloc[0]
+
+            transactions_processed = optional_i(
+                step_row.get("transactions_processed")
+            )
+            candidate_alerts = i(step_row.get("candidate_alerts"))
+            suppressed_alerts = i(step_row.get("suppressed_alerts"))
+            eligible_alerts = i(step_row.get("eligible_alerts"))
+            investigated_alerts = i(step_row.get("investigated_alerts"))
+            capacity_rejected_alerts = i(
+                step_row.get("capacity_rejected_alerts")
+            )
+            frauds_detected_step = optional_i(
+                step_row.get("frauds_detected")
+            )
+            frauds_present_step = optional_i(
+                step_row.get("frauds_present")
+            )
+            unused_capacity = i(step_row.get("unused_capacity"))
+
+            candidate_rate = (
+                candidate_alerts / transactions_processed
+                if transactions_processed
+                else 0.0
+            )
+
+            fraud_detection_rate_step = (
+                frauds_detected_step / frauds_present_step
+                if (
+                    frauds_detected_step is not None
+                    and frauds_present_step not in (None, 0)
+                )
+                else None
+            )
+
+            st.markdown(f"#### Step {int(selected_step)}")
+
+            # Operational flow: Transactions -> Candidates -> Eligible -> Investigated -> Fraud outcome
+            flow1, flow2, flow3, flow4, flow5 = st.columns(5)
+
+            with flow1:
+                metric_card(
+                    "Transactions processed",
+                    (
+                        f"{transactions_processed:,}"
+                        if transactions_processed is not None
+                        else "N/A"
+                    ),
+                    "Transactions belonging to this chronological PaySim step.",
+                    "blue",
+                )
+
+            with flow2:
+                candidate_card_text = (
+                    f"{candidate_rate:.1%} of transactions. "
+                    f"This is the observed candidate-alert rate produced by the "
+                    f"{explorer_policy} policy in this step."
+                )
+                if explorer_policy == "Adaptive":
+                    candidate_card_text = (
+                        f"{candidate_rate:.1%} of transactions. "
+                        f"Selected under the {explorer_multiplier:.1f}× Adaptive "
+                        f"budget configuration."
+                    )
+
+                metric_card(
+                    "Candidate alerts",
+                    f"{candidate_alerts:,}",
+                    candidate_card_text,
+                    "blue",
+                )
+
+            with flow3:
+                metric_card(
+                    "Eligible after suppression",
+                    f"{eligible_alerts:,}",
+                    (
+                        f"{suppressed_alerts:,} candidate alert"
+                        f"{'' if suppressed_alerts == 1 else 's'} suppressed."
+                    ),
+                    "orange" if suppressed_alerts > 0 else "blue",
+                )
+
+            with flow4:
+                metric_card(
+                    "Investigated",
+                    f"{investigated_alerts:,} / {int(alert_budget_per_step):,}",
+                    (
+                        f"{capacity_rejected_alerts:,} eligible alert"
+                        f"{'' if capacity_rejected_alerts == 1 else 's'} left outside "
+                        "the queue because of capacity."
+                    ),
+                    "green",
+                )
+
+            with flow5:
+                metric_card(
+                    "Frauds detected",
+                    (
+                        f"{frauds_detected_step:,} / {frauds_present_step:,}"
+                        if (
+                            frauds_detected_step is not None
+                            and frauds_present_step is not None
+                        )
+                        else "N/A"
+                    ),
+                    (
+                        f"{fraud_detection_rate_step:.1%} of frauds in this step "
+                        "reached investigation."
+                        if fraud_detection_rate_step is not None
+                        else "Retrospective PaySim fraud labels."
+                    ),
+                    "green",
+                )
+
+            # ------------------------------------------------
+            # CLICKABLE EXPLANATIONS: mechanism -> numbers -> result
+            # ------------------------------------------------
+            baseline_static_payload = data.get("static_sequential", {})
+            baseline_static_steps = pd.DataFrame(
+                baseline_static_payload.get("operational_steps", [])
+            )
+
+            static_step_candidates = None
+            static_step_rate = None
+
+            if not baseline_static_steps.empty:
+                static_step_rows = baseline_static_steps[
+                    pd.to_numeric(
+                        baseline_static_steps["step"],
+                        errors="coerce",
+                    ).fillna(-1).astype(int).eq(int(selected_step))
+                ]
+
+                if not static_step_rows.empty:
+                    static_step_row = static_step_rows.iloc[0]
+                    static_step_candidates = i(
+                        static_step_row.get("candidate_alerts")
+                    )
+                    static_step_transactions = optional_i(
+                        static_step_row.get("transactions_processed")
+                    )
+                    if static_step_transactions:
+                        static_step_rate = (
+                            static_step_candidates / static_step_transactions
+                        )
+
+            if explorer_policy == "Static":
+                with st.expander(
+                    f"Why did {candidate_alerts:,} of "
+                    f"{transactions_processed:,} transactions become Static candidate alerts?"
+                    if transactions_processed is not None
+                    else "How does Static create candidate alerts?",
+                    expanded=False,
+                ):
+                    st.markdown(
+                        f"""
+                        **1. The ML model scores every transaction.**  
+                        Each transaction receives a fraud-risk probability.
+
+                        **2. Static applies one fixed rule:**  
+                        `fraud risk ≥ {float(static_threshold):.2f}`
+
+                        **3. The percentage is an outcome, not a setting.**  
+                        In Step {int(selected_step)}, **{candidate_alerts:,}** of
+                        **{transactions_processed:,}** transactions had a fraud score at or
+                        above **{float(static_threshold):.2f}**. Therefore:
+
+                        `{candidate_alerts:,} ÷ {transactions_processed:,} = {candidate_rate:.1%}`
+
+                        So the **{candidate_rate:.1%} candidate-alert rate was produced by the
+                        score distribution in this step**. The dashboard did not configure a
+                        target of {candidate_rate:.1%}.
+                        """
+                    )
+
+                    st.markdown(
+                        """
+                        **Decision path**
+
+                        `Transaction → ML fraud score → fixed threshold → candidate alert / no alert`
+                        """
+                    )
+
+            else:
+                explorer_parameters = explorer_data.get("parameters", {})
+                static_global_budget = i(
+                    explorer_parameters.get(
+                        "static_batch_alert_budget",
+                        parameters.get("static_batch_alert_budget", 0),
+                    )
+                )
+                adaptive_global_budget = i(
+                    explorer_parameters.get(
+                        "adaptive_batch_alert_budget",
+                        parameters.get("adaptive_batch_alert_budget", 0),
+                    )
+                )
+                current_floor = n(
+                    explorer_parameters.get(
+                        "risk_zone_floor",
+                        risk_zone_floor,
+                    )
+                )
+                current_static_threshold = n(
+                    explorer_parameters.get(
+                        "static_threshold",
+                        static_threshold,
+                    )
+                )
+                raw_budget = static_global_budget * explorer_multiplier
+                budget_increase = adaptive_global_budget - static_global_budget
+
+                # Candidate-level numbers for this selected Adaptive step.
+                adaptive_step_rows_for_explanation = pd.DataFrame(
+                    explorer_payload.get("decision_rows", [])
+                )
+
+                adaptive_high_score = 0
+                adaptive_risk_zone = 0
+                adaptive_below_floor = 0
+                adaptive_min_score = None
+                adaptive_max_score = None
+                adaptive_median_score = None
+
+                if not adaptive_step_rows_for_explanation.empty:
+                    adaptive_step_rows_for_explanation["step"] = pd.to_numeric(
+                        adaptive_step_rows_for_explanation.get("step"),
+                        errors="coerce",
+                    )
+                    adaptive_step_rows_for_explanation = (
+                        adaptive_step_rows_for_explanation[
+                            adaptive_step_rows_for_explanation["step"].eq(
+                                int(selected_step)
+                            )
+                        ].copy()
+                    )
+
+                    if "policy_alert_candidate" in adaptive_step_rows_for_explanation.columns:
+                        adaptive_step_rows_for_explanation = (
+                            adaptive_step_rows_for_explanation[
+                                adaptive_step_rows_for_explanation[
+                                    "policy_alert_candidate"
+                                ].fillna(False).astype(bool)
+                            ].copy()
+                        )
+
+                    adaptive_scores = pd.to_numeric(
+                        adaptive_step_rows_for_explanation.get("fraud_score"),
+                        errors="coerce",
+                    ).dropna()
+
+                    if not adaptive_scores.empty:
+                        adaptive_high_score = int(
+                            (adaptive_scores >= current_static_threshold).sum()
+                        )
+                        adaptive_risk_zone = int(
+                            (
+                                (adaptive_scores >= current_floor)
+                                & (adaptive_scores < current_static_threshold)
+                            ).sum()
+                        )
+                        adaptive_below_floor = int(
+                            (adaptive_scores < current_floor).sum()
+                        )
+                        adaptive_min_score = float(adaptive_scores.min())
+                        adaptive_max_score = float(adaptive_scores.max())
+                        adaptive_median_score = float(adaptive_scores.median())
+
+                with st.expander(
+                    f"How is the {explorer_multiplier:.1f}× Adaptive budget calculated?",
+                    expanded=False,
+                ):
+                    st.markdown(
+                        f"""
+                        The multiplier is applied **globally to the Static candidate-alert
+                        volume for the full {int(transaction_limit):,}-transaction evaluation**,
+                        not separately to Step {int(selected_step)}.
+
+                        **Current calculation**
+
+                        Static baseline alerts: **{static_global_budget:,}**  
+                        Budget multiplier: **{explorer_multiplier:.1f}×**  
+                        Raw calculation: **{static_global_budget:,} × {explorer_multiplier:.1f}
+                        = {raw_budget:,.1f}**  
+                        Backend alert budget: **{adaptive_global_budget:,}**
+
+                        The backend converts the product to an integer alert budget, so the
+                        Adaptive policy can select up to **{adaptive_global_budget:,}**
+                        candidates across the complete evaluated dataset.
+
+                        Compared with Static, that is **{budget_increase:+,} additional
+                        policy-level alert slots**.
+                        """
+                    )
+
+                    st.info(
+                        "This is not analyst capacity. Analyst capacity is still "
+                        f"{int(alert_budget_per_step)} investigations per operational step."
+                    )
+
+                with st.expander(
+                    "Does the Budget Multiplier lower the 0.50 threshold?",
+                    expanded=False,
+                ):
+                    st.markdown(
+                        f"""
+                        **No. This distinction is important.**
+
+                        The Static policy uses **{current_static_threshold:.2f}** as its
+                        candidate cut-off.
+
+                        The Adaptive `risk_zone` policy instead uses:
+
+                        - minimum fraud-risk floor: **{current_floor:.2f}**
+                        - positive expected-benefit requirement
+                        - operational **Rank score** ordering
+                        - global alert budget: **{adaptive_global_budget:,}**
+
+                        The multiplier therefore **changes how many ranked Adaptive candidates
+                        may be selected**. It does not mathematically transform
+                        `{current_static_threshold:.2f}` into a new threshold.
+
+                        Under the `risk_zone` ranking used here, eligible cases are ordered by
+                        operational priority (`Rank score`), which combines fraud risk with
+                        transaction amount. The budget determines how far down that ranked
+                        eligible list the policy is allowed to go.
+                        """
+                    )
+
+                    st.markdown(
+                        f"""
+                        **Think of it as two different gates**
+
+                        `Static: fraud risk ≥ {current_static_threshold:.2f}`
+
+                        `Adaptive: fraud risk ≥ {current_floor:.2f} + positive expected benefit
+                        → rank eligible cases → keep the top {adaptive_global_budget:,}`
+                        """
+                    )
+
+                with st.expander(
+                    f"What did that mean numerically in Step {int(selected_step)}?",
+                    expanded=False,
+                ):
+                    candidate_difference = (
+                        candidate_alerts - static_step_candidates
+                        if static_step_candidates is not None
+                        else None
+                    )
+                    relative_difference = (
+                        candidate_difference / static_step_candidates
+                        if (
+                            candidate_difference is not None
+                            and static_step_candidates
+                        )
+                        else None
+                    )
+
+                    st.markdown(
+                        f"""
+                        **Observed Step {int(selected_step)} result**
+
+                        Transactions processed: **{transactions_processed:,}**  
+                        Static candidates: **{static_step_candidates:,}**
+                        ({static_step_rate:.1%})  
+                        Adaptive candidates: **{candidate_alerts:,}**
+                        ({candidate_rate:.1%})
+                        """
+                        if (
+                            transactions_processed is not None
+                            and static_step_candidates is not None
+                            and static_step_rate is not None
+                        )
+                        else f"""
+                        Adaptive candidates in Step {int(selected_step)}:
+                        **{candidate_alerts:,}**
+                        """
+                    )
+
+                    if candidate_difference is not None:
+                        st.markdown(
+                            f"""
+                            Adaptive therefore added **{candidate_difference:+,} candidate
+                            alerts** in this step
+                            (**{relative_difference:+.1%} relative to Static**).
+                            """
+                        )
+
+                    if adaptive_min_score is not None:
+                        st.markdown(
+                            f"""
+                            **Fraud-risk composition of the {candidate_alerts:,} Adaptive
+                            candidates**
+
+                            - Score **≥ {current_static_threshold:.2f}**:
+                              **{adaptive_high_score:,} candidates**
+                            - Score **{current_floor:.2f}–{current_static_threshold:.2f}**:
+                              **{adaptive_risk_zone:,} candidates**
+                            - Score **< {current_floor:.2f}**:
+                              **{adaptive_below_floor:,} candidates**
+                            - Lowest selected candidate fraud risk:
+                              **{adaptive_min_score:.1%}**
+                            - Median selected candidate fraud risk:
+                              **{adaptive_median_score:.1%}**
+                            - Highest selected candidate fraud risk:
+                              **{adaptive_max_score:.1%}**
+                            """
+                        )
+
+                        if adaptive_risk_zone > 0:
+                            st.success(
+                                f"This is the concrete Adaptive expansion: "
+                                f"{adaptive_risk_zone:,} candidate alerts in this step had "
+                                f"fraud scores below the Static {current_static_threshold:.2f} "
+                                f"cut-off but remained above the Adaptive minimum floor of "
+                                f"{current_floor:.2f} and ranked highly enough to enter the "
+                                "Adaptive candidate pool."
+                            )
+
+                with st.expander(
+                    "Why can 1.4× produce 359 alerts here instead of exactly 1.4 × 294?",
+                    expanded=False,
+                ):
+                    st.markdown(
+                        f"""
+                        Because **{explorer_multiplier:.1f}× is calculated from the Static
+                        alert volume across the entire evaluated dataset**, not from the
+                        **{static_step_candidates:,} Static alerts in Step {int(selected_step)}**.
+
+                        The Adaptive policy first receives a **global budget of
+                        {adaptive_global_budget:,} alerts**. It then selects the highest-ranked
+                        eligible transactions across the full evaluation. Those selected
+                        transactions are subsequently replayed chronologically, which is why
+                        **{candidate_alerts:,}** of them happen to fall inside
+                        Step {int(selected_step)}.
+
+                        Therefore:
+
+                        `1.4 × global Static alerts → global Adaptive budget`
+
+                        not:
+
+                        `1.4 × Step {int(selected_step)} Static alerts → Step {int(selected_step)} Adaptive alerts`
+                        """
+                    )
+
+            # Compare a local Adaptive multiplier against the baseline dashboard setting.
+            if (
+                explorer_policy == "Adaptive"
+                and abs(explorer_multiplier - baseline_multiplier) > 1e-9
+                and not baseline_explorer_steps.empty
+            ):
+                baseline_step_rows = baseline_explorer_steps[
+                    pd.to_numeric(
+                        baseline_explorer_steps["step"],
+                        errors="coerce",
+                    ).fillna(-1).astype(int).eq(int(selected_step))
+                ]
+
+                if not baseline_step_rows.empty:
+                    baseline_row = baseline_step_rows.iloc[0]
+
+                    baseline_candidates = i(
+                        baseline_row.get("candidate_alerts")
+                    )
+                    baseline_investigated = i(
+                        baseline_row.get("investigated_alerts")
+                    )
+                    baseline_rejected = i(
+                        baseline_row.get("capacity_rejected_alerts")
+                    )
+                    baseline_frauds = optional_i(
+                        baseline_row.get("frauds_detected")
+                    )
+
+                    delta_candidates = candidate_alerts - baseline_candidates
+                    delta_investigated = investigated_alerts - baseline_investigated
+                    delta_rejected = capacity_rejected_alerts - baseline_rejected
+                    delta_frauds = (
+                        frauds_detected_step - baseline_frauds
+                        if (
+                            frauds_detected_step is not None
+                            and baseline_frauds is not None
+                        )
+                        else None
+                    )
+
+                    st.markdown(
+                        f"##### Compared with the {baseline_multiplier:.1f}× baseline"
+                    )
+
+                    d1, d2, d3, d4 = st.columns(4)
+
+                    with d1:
+                        st.metric(
+                            "Candidate alerts",
+                            f"{candidate_alerts:,}",
+                            f"{delta_candidates:+,}",
+                        )
+
+                    with d2:
+                        st.metric(
+                            "Investigated",
+                            f"{investigated_alerts:,}",
+                            f"{delta_investigated:+,}",
+                        )
+
+                    with d3:
+                        st.metric(
+                            "Capacity rejected",
+                            f"{capacity_rejected_alerts:,}",
+                            f"{delta_rejected:+,}",
+                            delta_color="inverse",
+                        )
+
+                    with d4:
+                        st.metric(
+                            "Frauds detected",
+                            (
+                                f"{frauds_detected_step:,}"
+                                if frauds_detected_step is not None
+                                else "N/A"
+                            ),
+                            (
+                                f"{delta_frauds:+,}"
+                                if delta_frauds is not None
+                                else None
+                            ),
+                        )
+
+                    if delta_candidates > 0 and delta_investigated == 0:
+                        st.caption(
+                            "The larger Adaptive budget created more candidate alerts, "
+                            "but analyst capacity prevented additional investigations in "
+                            "this step. This indicates a capacity bottleneck."
+                        )
+
+            # Dynamic narrative.
+            explanation_parts = []
+
+            if suppressed_alerts > 0:
+                explanation_parts.append(
+                    f"{suppressed_alerts:,} repeated alert"
+                    f"{' was' if suppressed_alerts == 1 else 's were'} suppressed before "
+                    "analyst capacity was applied."
+                )
+
+            if capacity_rejected_alerts > 0:
+                explanation_parts.append(
+                    f"{eligible_alerts:,} alerts remained eligible after suppression. "
+                    f"The step capacity allowed {investigated_alerts:,} investigations, "
+                    f"so {capacity_rejected_alerts:,} lower-priority alert"
+                    f"{' was' if capacity_rejected_alerts == 1 else 's were'} not investigated. "
+                    "The highest-priority eligible cases entered the queue first."
+                )
+            elif eligible_alerts == 0:
+                explanation_parts.append(
+                    "No alert remained eligible for investigation after policy selection "
+                    "and suppression."
+                )
+            elif investigated_alerts < int(alert_budget_per_step):
+                explanation_parts.append(
+                    f"All {investigated_alerts:,} eligible alert"
+                    f"{' was' if investigated_alerts == 1 else 's were'} investigated because "
+                    f"the available capacity was {int(alert_budget_per_step):,}. "
+                    "No eligible alert was rejected because of capacity."
+                )
+            else:
+                explanation_parts.append(
+                    f"The analyst queue used all {int(alert_budget_per_step):,} available "
+                    "places in this step, with no additional eligible alert left outside the queue."
+                )
+
+            if (
+                frauds_detected_step is not None
+                and frauds_present_step is not None
+            ):
+                explanation_parts.append(
+                    f"Retrospective evaluation shows {frauds_detected_step:,} of "
+                    f"{frauds_present_step:,} fraud transaction"
+                    f"{'' if frauds_present_step == 1 else 's'} in this step reached investigation."
+                )
+
+            st.markdown(
+                f"""
+                <div class="step-explanation">
+                    <strong>What happened in Step {int(selected_step)}?</strong><br>
+                    {html.escape(" ".join(explanation_parts))}
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            # Transaction-level drill-down.
+            st.markdown("#### Alerts in this step")
+            st.caption(
+                "Inspect the candidate alerts behind the selected step. Priority categories "
+                "are derived from the actual per-step queue and analyst-capacity cut-off."
+            )
+
+            step_alerts = pd.DataFrame(
+                explorer_payload.get("decision_rows", [])
+            )
+
+            if step_alerts.empty:
+                st.info(
+                    "Transaction-level decision rows are not available for this policy."
+                )
+            else:
+                for bool_column in [
+                    "policy_alert_candidate",
+                    "selected_alert",
+                    "suppression_applied",
+                    "capacity_rejected",
+                ]:
+                    if bool_column in step_alerts.columns:
+                        step_alerts[bool_column] = (
+                            step_alerts[bool_column]
+                            .fillna(False)
+                            .astype(bool)
+                        )
+
+                step_alerts["step"] = pd.to_numeric(
+                    step_alerts.get("step"),
+                    errors="coerce",
+                )
+
+                step_alerts = step_alerts[
+                    step_alerts["step"].eq(int(selected_step))
+                ].copy()
+
+                if "policy_alert_candidate" in step_alerts.columns:
+                    step_alerts = step_alerts[
+                        step_alerts["policy_alert_candidate"]
+                    ].copy()
+
+                if step_alerts.empty:
+                    st.info(
+                        f"No candidate alerts were returned for Step {int(selected_step)}."
+                    )
+                else:
+                    step_alerts["Priority rank"] = pd.to_numeric(
+                        step_alerts.get("candidate_priority_rank"),
+                        errors="coerce",
+                    )
+                    step_alerts["Fraud risk (%)"] = (
+                        pd.to_numeric(
+                            step_alerts.get("fraud_score"),
+                            errors="coerce",
+                        )
+                        * 100.0
+                    )
+                    step_alerts["Rank score"] = pd.to_numeric(
+                        step_alerts.get("rank_score"),
+                        errors="coerce",
+                    )
+
+                    def step_decision(row: pd.Series) -> str:
+                        if bool(row.get("suppression_applied", False)):
+                            return "Suppressed"
+                        if bool(row.get("selected_alert", False)):
+                            return "Investigated"
+                        if bool(row.get("capacity_rejected", False)):
+                            return "Not investigated"
+                        return "Candidate"
+
+                    def step_priority_category(row: pd.Series) -> str:
+                        if bool(row.get("suppression_applied", False)):
+                            return "Suppressed"
+
+                        rank = row.get("Priority rank")
+                        if pd.isna(rank):
+                            return "Unranked candidate"
+
+                        rank = int(rank)
+                        if bool(row.get("selected_alert", False)):
+                            return "Within capacity"
+                        if (
+                            bool(row.get("capacity_rejected", False))
+                            and rank == int(alert_budget_per_step) + 1
+                        ):
+                            return "First excluded"
+                        if bool(row.get("capacity_rejected", False)):
+                            return "Below capacity cut-off"
+                        return "Candidate"
+
+                    def step_reason(row: pd.Series) -> str:
+                        rank = row.get("Priority rank")
+                        rank_text = (
+                            f"Priority #{int(rank)}"
+                            if pd.notna(rank)
+                            else "Candidate alert"
+                        )
+
+                        if bool(row.get("suppression_applied", False)):
+                            return (
+                                "Repeated alert removed before analyst capacity was applied."
+                            )
+                        if bool(row.get("selected_alert", False)):
+                            return (
+                                f"{rank_text}; selected before the per-step capacity cut-off."
+                            )
+                        if bool(row.get("capacity_rejected", False)):
+                            return (
+                                f"{rank_text}; higher-priority eligible alerts filled "
+                                "the available analyst capacity first."
+                            )
+                        return "Candidate alert without a final Sequential selection."
+
+                    step_alerts["Decision"] = step_alerts.apply(
+                        step_decision,
+                        axis=1,
+                    )
+                    step_alerts["Priority category"] = step_alerts.apply(
+                        step_priority_category,
+                        axis=1,
+                    )
+                    step_alerts["Reason"] = step_alerts.apply(
+                        step_reason,
+                        axis=1,
+                    )
+
+                    if "isFraud" in step_alerts.columns:
+                        actual_fraud = pd.to_numeric(
+                            step_alerts["isFraud"],
+                            errors="coerce",
+                        )
+                        step_alerts["Actual outcome"] = actual_fraud.map(
+                            {1: "Fraud", 0: "Non-fraud"}
+                        ).fillna("Unknown")
+                    else:
+                        step_alerts["Actual outcome"] = "Unknown"
+
+                    step_alerts["Transaction ID"] = (
+                        step_alerts.get(
+                            "transaction_id",
+                            pd.Series(
+                                index=step_alerts.index,
+                                dtype="object",
+                            ),
+                        )
+                        .astype(str)
+                        .map(lambda value: f"TX-{value}")
+                    )
+
+                    if "type" not in step_alerts.columns:
+                        step_alerts["type"] = "N/A"
+
+                    f1, f2 = st.columns(2)
+
+                    with f1:
+                        decision_filter = st.selectbox(
+                            "Decision filter",
+                            [
+                                "All",
+                                "Investigated",
+                                "Not investigated",
+                                "Suppressed",
+                            ],
+                            key=f"step_alert_decision_{explorer_policy}_{selected_step}",
+                        )
+
+                    with f2:
+                        outcome_filter = st.selectbox(
+                            "Actual outcome filter",
+                            ["All", "Fraud", "Non-fraud"],
+                            key=f"step_alert_outcome_{explorer_policy}_{selected_step}",
+                        )
+
+                    filtered_step_alerts = step_alerts.copy()
+
+                    if decision_filter != "All":
+                        filtered_step_alerts = filtered_step_alerts[
+                            filtered_step_alerts["Decision"].eq(
+                                decision_filter
+                            )
+                        ]
+
+                    if outcome_filter != "All":
+                        filtered_step_alerts = filtered_step_alerts[
+                            filtered_step_alerts["Actual outcome"].eq(
+                                outcome_filter
+                            )
+                        ]
+
+                    filtered_step_alerts = filtered_step_alerts.sort_values(
+                        ["Priority rank", "Rank score"],
+                        ascending=[True, False],
+                        na_position="last",
+                    )
+
+                    # Empty-state fix: no blank dataframe.
+                    if filtered_step_alerts.empty:
+                        if decision_filter == "Suppressed" and suppressed_alerts == 0:
+                            empty_reason = (
+                                f"There are no suppressed alerts in Step {int(selected_step)}."
+                            )
+                        elif (
+                            decision_filter == "Not investigated"
+                            and capacity_rejected_alerts == 0
+                        ):
+                            empty_reason = (
+                                f"No eligible alert was rejected by capacity in "
+                                f"Step {int(selected_step)}."
+                            )
+                        else:
+                            empty_reason = (
+                                "No candidate alert matches the selected combination "
+                                "of decision and retrospective outcome filters."
+                            )
+
+                        st.info(
+                            f"**No alerts match the selected filters.**  \n{empty_reason}"
+                        )
+                    else:
+                        st.caption(
+                            f"Showing {len(filtered_step_alerts):,} of "
+                            f"{len(step_alerts):,} candidate alerts in "
+                            f"Step {int(selected_step)}."
+                        )
+
+                        display_step_alerts = filtered_step_alerts[
+                            [
+                                "Priority rank",
+                                "Priority category",
+                                "Transaction ID",
+                                "type",
+                                "Fraud risk (%)",
+                                "Rank score",
+                                "Decision",
+                                "Reason",
+                                "Actual outcome",
+                            ]
+                        ].rename(
+                            columns={
+                                "type": "Type",
+                            }
+                        )
+
+                        st.dataframe(
+                            display_step_alerts,
+                            width="stretch",
+                            hide_index=True,
+                            height=min(
+                                560,
+                                38 * max(
+                                    5,
+                                    min(len(display_step_alerts) + 1, 14),
+                                ),
+                            ),
+                            column_config={
+                                "Priority rank": st.column_config.NumberColumn(
+                                    "Priority rank",
+                                    format="%d",
+                                ),
+                                "Fraud risk (%)": st.column_config.NumberColumn(
+                                    "Fraud risk",
+                                    format="%.1f%%",
+                                ),
+                                "Rank score": st.column_config.NumberColumn(
+                                    "Rank score",
+                                    format="%.2f",
+                                ),
+                            },
+                        )
+
+                        filtered_actual_frauds = int(
+                            filtered_step_alerts[
+                                "Actual outcome"
+                            ].eq("Fraud").sum()
+                        )
+                        if filtered_actual_frauds > 0:
+                            st.caption(
+                                f"The current filtered view contains "
+                                f"{filtered_actual_frauds:,} retrospective fraud"
+                                f"{'' if filtered_actual_frauds == 1 else 's'}."
+                            )
+
+            with st.expander(
+                "Step accounting details",
+                expanded=False,
+            ):
+                step_accounting = pd.DataFrame(
+                    [
+                        {
+                            "Policy": explorer_policy,
+                            "Step": int(selected_step),
+                            "Transactions processed": transactions_processed,
+                            "Candidate alerts": candidate_alerts,
+                            "Suppressed": suppressed_alerts,
+                            "Eligible": eligible_alerts,
+                            "Capacity": int(alert_budget_per_step),
+                            "Investigated": investigated_alerts,
+                            "Capacity rejected": capacity_rejected_alerts,
+                            "Unused capacity": unused_capacity,
+                            "Frauds present": frauds_present_step,
+                            "Frauds detected": frauds_detected_step,
+                        }
+                    ]
+                )
+                st.dataframe(
+                    step_accounting,
+                    width="stretch",
+                    hide_index=True,
+                )
+
+    # --------------------------------------------------------
+    # 3. METHODOLOGICAL CONTEXT
+    # --------------------------------------------------------
+    with st.expander(
+        "Methodological context: Batch vs Sequential",
+        expanded=False,
+    ):
         st.markdown(
             """
             **Why is this important?**  
-            Sequential replay introduces operational constraints that are absent from a simple
-            Batch evaluation. Batch is retained as an ideal methodological baseline; the main
-            operational conclusions of the dashboard are based on the Sequential replay.
+            Batch evaluation is retained as an ideal reference before chronology,
+            suppression and per-step analyst capacity are introduced. Sequential replay
+            asks what can actually reach investigation once those operational constraints
+            are enforced.
             """
         )
 
@@ -1954,70 +3003,38 @@ with workflow_tab:
             ]
         )
 
-        st.dataframe(batch_vs_sequential, width="stretch", hide_index=True)
+        st.dataframe(
+            batch_vs_sequential,
+            width="stretch",
+            hide_index=True,
+        )
 
         st.caption(
-            "The machine-learning model itself is unchanged. The difference comes from "
+            "The machine-learning model is unchanged. The difference comes from "
             "the operational constraints introduced around the model."
         )
 
+    # --------------------------------------------------------
+    # 4. REAL-TIME TERMINOLOGY — concise, no repeated table
+    # --------------------------------------------------------
     st.markdown("### Is this truly real time?")
-
-    realtime_table = pd.DataFrame(
-        [
-            {
-                "Feature": "Data source",
-                "Current simulation": "Historical stored transactions",
-                "True real-time system": "Continuously arriving live transactions",
-            },
-            {
-                "Feature": "Processing",
-                "Current simulation": "Offline chronological replay",
-                "True real-time system": "Immediate event-by-event processing",
-            },
-            {
-                "Feature": "Alerts",
-                "Current simulation": "Simulated analyst queue",
-                "True real-time system": "Production alerts sent immediately",
-            },
-            {
-                "Feature": "Correct description",
-                "Current simulation": "Sequential / real-time-oriented simulation",
-                "True real-time system": "Live real-time fraud operations",
-            },
-        ]
-    )
-
-    st.dataframe(
-        realtime_table,
-        width="stretch",
-        hide_index=True,
-    )
-
     st.markdown(
         """
         <div class="warning">
-            <strong>Correct terminology</strong><br>
-            This is not a deployed real-time system. It is an offline sequential
-            simulation or chronological replay that imitates real-time decision cycles.
+            <strong>No — this is an offline chronological replay.</strong><br>
+            Stored PaySim transactions are processed in step order to imitate successive
+            operational decision cycles. A production real-time implementation would require
+            a live transaction stream, explicit mapping of steps to real time and delayed
+            analyst outcomes.
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    st.markdown(
-        """
-        <div class="decision-box">
-            <strong>Management recommendation</strong><br>
-            Before production use, define how one operational step maps to real time,
-            connect the system to a live transaction stream and collect delayed analyst
-            outcomes for continuous monitoring.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    with st.expander("Technical details"):
+    # --------------------------------------------------------
+    # 5. TECHNICAL DETAILS
+    # --------------------------------------------------------
+    with st.expander("Technical details", expanded=False):
         st.markdown("#### PaySim step")
         st.markdown(
             f"""
@@ -2034,10 +3051,10 @@ with workflow_tab:
             When the replay moves to the next step, the analyst limit is reset. Unused
             capacity from an earlier step is not transferred to a later one.
 
-            **Important distinction**  
-            An operational step is not a Monitoring Window. A step controls the sequential
-            decision logic and analyst-capacity reset. A Monitoring Window is only a reporting
-            block of consecutive transactions used to display trends.
+            **Operational step vs Monitoring Window**  
+            An operational step controls the sequential decision logic and capacity reset.
+            A Monitoring Window is only a reporting block of consecutive transactions used
+            to display trends.
             """
         )
 
@@ -2047,7 +3064,8 @@ with workflow_tab:
                 "simulation_type": "offline chronological replay",
                 "capacity_per_step": int(alert_budget_per_step),
                 "suppression_window": int(suppression_window),
-                "unique_steps": i(parameters.get("unique_steps")),
+                "unique_steps": unique_steps,
+                "step_explorer_available": True,
             }
         )
 
