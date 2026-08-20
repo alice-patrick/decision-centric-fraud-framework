@@ -1909,7 +1909,7 @@ with workflow_tab:
     compact_steps = [
         ("1. Transactions arrive", "Historical transactions are replayed chronologically."),
         ("2. Fraud risk is calculated", "The fixed ML model assigns a fraud-risk score."),
-        ("3. Candidate alerts are created", "Static or Adaptive policy selects cases."),
+        ("3. Alerts are created", "Static or Adaptive decision rules determine which transactions become alerts."),
         ("4. Repeated alerts may be suppressed", "Duplicate entity alerts may be filtered."),
         ("5. Alerts are prioritised", "Higher-priority cases are considered first."),
         ("6. Analyst capacity is applied", "Only alerts within each step limit enter the queue."),
@@ -2098,7 +2098,7 @@ with workflow_tab:
 
                     **Adaptive**
 
-                    A transaction must satisfy both:
+                    A transaction must first satisfy:
 
                     `Fraud Risk ≥ {float(risk_zone_floor):.2f}`
 
@@ -2106,22 +2106,13 @@ with workflow_tab:
 
                     `Expected Benefit > 0`
 
-                    The cost-aware calculation is:
+                    Eligible Adaptive alerts are then ordered by **Rank Score**.
 
-                    `Expected Fraud Loss = Fraud Risk × Amount × False-Negative Factor`
+                    The **Budget Multiplier** determines how many of these ordered alerts may
+                    be retained within the Adaptive alert budget.
 
-                    `Expected Investigation Cost = (1 − Fraud Risk) × Investigation Cost`
-
-                    `Expected Benefit = Expected Fraud Loss − Expected Investigation Cost`
-
-                    For the current `risk_zone` policy:
-
-                    **Rank Score = Expected Benefit**
-
-                    Eligible Adaptive alerts are ordered from highest to lowest Rank Score.
-
-                    The **Budget Multiplier** then limits how many of those ordered alerts may
-                    be kept. It does not change Fraud Risk or Rank Score.
+                    The detailed Expected Benefit and Rank Score calculation is explained later
+                    in the Operational Step Explorer.
                     """
                 )
 
@@ -2130,11 +2121,7 @@ with workflow_tab:
                     """
                     **Output**
 
-                    Static alerts
-
-                    **or**
-
-                    Adaptive alerts ordered by operational priority
+                    Static or Adaptive alerts ready for the next decision stage
                     """
                 )
 
@@ -2265,14 +2252,14 @@ with workflow_tab:
                     The replay can investigate at most
                     **{int(alert_budget_per_step)} alerts in each operational step**.
 
-                    Higher-priority alerts enter first.
+                    Higher-priority alerts enter investigation first.
 
-                    Once capacity is full, remaining eligible alerts are marked as
-                    **capacity rejected** for that step.
+                    Once capacity is full, the remaining prioritised alerts are marked as
+                    **capacity-rejected for that step**.
 
-                    Candidate selection and analyst capacity are separate:
-                    the policy decides which alerts exist; analyst capacity decides how many
-                    can actually be investigated.
+                    Alert selection and analyst capacity are separate:
+                    the policy determines which transactions become alerts, while analyst
+                    capacity determines how many can actually be investigated.
                     """
                 )
 
@@ -2282,8 +2269,6 @@ with workflow_tab:
                     **Output**
 
                     Investigated alerts
-
-                    Suppressed alerts
 
                     Capacity-rejected alerts
                     """
@@ -3727,7 +3712,7 @@ with workflow_tab:
 
                     with d1:
                         st.metric(
-                            "Candidate alerts",
+                            "Alerts",
                             f"{candidate_alerts:,}",
                             f"{delta_candidates:+,}",
                         )
@@ -3923,7 +3908,7 @@ with workflow_tab:
                         rank_text = (
                             f"Priority #{int(rank)}"
                             if pd.notna(rank)
-                            else "Candidate alert"
+                            else "Alert"
                         )
 
                         if bool(row.get("suppression_applied", False)):
@@ -3939,7 +3924,7 @@ with workflow_tab:
                                 f"{rank_text}; higher-priority eligible alerts filled "
                                 "the available analyst capacity first."
                             )
-                        return "Candidate alert without a final Sequential selection."
+                        return "Alert without a final Sequential selection."
 
                     step_alerts["Decision"] = step_alerts.apply(
                         step_decision,
@@ -4120,7 +4105,7 @@ with workflow_tab:
                             "Policy": explorer_policy,
                             "Step": int(selected_step),
                             "Transactions processed": transactions_processed,
-                            "Candidate alerts": candidate_alerts,
+                            "Alerts": candidate_alerts,
                             "Suppressed": suppressed_alerts,
                             "Eligible": eligible_alerts,
                             "Capacity": int(alert_budget_per_step),
