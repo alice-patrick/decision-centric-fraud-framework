@@ -1940,7 +1940,7 @@ with workflow_tab:
     st.markdown("### Operational Step Explorer")
     st.caption(
         "Select a policy and a chronological step to inspect how transactions "
-        "became candidate alerts, how capacity affected the queue and which frauds "
+        "became alerts, how capacity affected the queue and which frauds "
         "were ultimately investigated."
     )
 
@@ -2110,7 +2110,7 @@ with workflow_tab:
             with flow2:
                 candidate_card_text = (
                     f"{candidate_rate:.1%} of transactions. "
-                    f"This is the observed candidate-alert rate produced by the "
+                    f"This is the observed alert rate produced by the "
                     f"{explorer_policy} policy in this step."
                 )
                 if explorer_policy == "Adaptive":
@@ -2121,7 +2121,7 @@ with workflow_tab:
                     )
 
                 metric_card(
-                    "Candidate alerts",
+                    "Alerts",
                     f"{candidate_alerts:,}",
                     candidate_card_text,
                     "blue",
@@ -2132,7 +2132,7 @@ with workflow_tab:
                     "Eligible after suppression",
                     f"{eligible_alerts:,}",
                     (
-                        f"{suppressed_alerts:,} candidate alert"
+                        f"{suppressed_alerts:,} alert"
                         f"{'' if suppressed_alerts == 1 else 's'} suppressed."
                     ),
                     "orange" if suppressed_alerts > 0 else "blue",
@@ -2212,9 +2212,9 @@ with workflow_tab:
             if explorer_policy == "Static":
                 static_question = (
                     f"Why did {candidate_alerts:,} of {transactions_processed:,} "
-                    "transactions become Static candidate alerts?"
+                    "transactions become Static alerts?"
                     if transactions_processed is not None
-                    else "How does Static create candidate alerts?"
+                    else "How does Static create alerts?"
                 )
 
                 with st.expander(
@@ -2258,12 +2258,16 @@ with workflow_tab:
                         """
                         **Decision path**
 
-                        `Transaction → ML fraud score → fixed threshold → candidate alert / no alert`
+                        `Transaction → ML fraud score → fixed threshold → alert / no alert`
                         """
                     )
 
             else:
+                # ========================================================
+                # ADAPTIVE EXPLANATION — ONE CONSISTENT STEP-BY-STEP STORY
+                # ========================================================
                 explorer_parameters = explorer_data.get("parameters", {})
+
                 static_global_budget = i(
                     explorer_parameters.get(
                         "static_batch_alert_budget",
@@ -2289,9 +2293,7 @@ with workflow_tab:
                     )
                 )
                 raw_budget = static_global_budget * explorer_multiplier
-                budget_increase = adaptive_global_budget - static_global_budget
 
-                # Candidate-level numbers for this selected Adaptive step.
                 adaptive_step_rows_for_explanation = pd.DataFrame(
                     explorer_payload.get("decision_rows", [])
                 )
@@ -2311,6 +2313,7 @@ with workflow_tab:
                         adaptive_step_rows_for_explanation.get("step"),
                         errors="coerce",
                     )
+
                     adaptive_step_rows_for_explanation = (
                         adaptive_step_rows_for_explanation[
                             adaptive_step_rows_for_explanation["step"].eq(
@@ -2360,414 +2363,658 @@ with workflow_tab:
                         adaptive_max_rank_score = float(adaptive_rank_scores.max())
                         adaptive_median_rank_score = float(adaptive_rank_scores.median())
 
+                # --------------------------------------------------------
+                # 1. SINGLE CORE EXPLANATION
+                # --------------------------------------------------------
                 with st.expander(
-                    f"How does the {explorer_multiplier:.1f}× Budget Multiplier work?",
+                    "How does Adaptive selection work, step by step?",
                     expanded=False,
                 ):
-                    st.markdown("#### Follow the calculation")
+                    st.markdown("#### 1 · Static establishes the reference volume")
+                    st.markdown(
+                        f"""
+                        The Static policy uses the fixed threshold:
+
+                        `fraud risk ≥ {current_static_threshold:.2f}`
+
+                        Across the full evaluation this produces
+                        **{static_global_budget:,} Static alerts**.
+                        """
+                    )
+
+                    st.markdown("---")
+                    st.markdown("#### 2 · Budget Multiplier sets the Adaptive alert budget")
 
                     b1, b2, b3 = st.columns(3)
-
                     with b1:
                         st.metric(
-                            "1. Static baseline",
-                            f"{static_global_budget:,} alerts",
-                        )
-                        st.caption(
-                            f"Created by the Static policy using its fixed "
-                            f"{current_static_threshold:.2f} threshold."
-                        )
-
-                    with b2:
-                        st.metric(
-                            "2. Budget Multiplier",
-                            f"{explorer_multiplier:.1f}×",
-                        )
-                        st.caption(
-                            f"{static_global_budget:,} × {explorer_multiplier:.1f} "
-                            f"= {raw_budget:,.1f}"
-                        )
-
-                    with b3:
-                        st.metric(
-                            "3. Adaptive alert budget",
-                            f"{adaptive_global_budget:,} slots",
-                        )
-                        st.caption(
-                            f"Up to {adaptive_global_budget:,} Adaptive candidates "
-                            "can be selected across the evaluation."
-                        )
-
-                    st.markdown(
-                        f"""
-                        **So the calculation is:**
-
-                        `{current_static_threshold:.2f} Static threshold`
-                        → **{static_global_budget:,} Static alerts**
-                        → `× {explorer_multiplier:.1f}`
-                        → **{adaptive_global_budget:,} Adaptive candidate slots**
-
-                        The multiplier is therefore applied to the **number of alerts produced
-                        by the Static baseline**, not to the Adaptive {current_floor:.2f}
-                        minimum-risk floor.
-                        """
-                    )
-
-                    st.markdown("---")
-                    st.markdown("#### Then how does Adaptive fill those slots?")
-
-                    st.markdown(
-                        f"""
-                        The **{current_floor:.2f} Adaptive floor has a different job**:
-                        it determines which transactions are allowed to compete for the
-                        Adaptive candidate slots.
-
-                        **Adaptive selection sequence**
-
-                        `Fraud risk ≥ {current_floor:.2f}`  
-                        ↓  
-                        `Positive expected benefit`  
-                        ↓  
-                        `Rank eligible transactions by operational Rank score`  
-                        ↓  
-                        `Select the highest-ranked cases up to the {adaptive_global_budget:,}-alert budget`
-
-                        So these two controls answer different questions:
-
-                        - **Budget Multiplier ({explorer_multiplier:.1f}×):**
-                          *How many candidate slots may Adaptive use?*
-                        - **Minimum risk floor ({current_floor:.2f}):**
-                          *Which transactions are eligible to compete for those slots?*
-                        """
-                    )
-
-                    st.warning(
-                        f"Do not read this as '{current_floor:.2f} alerts × "
-                        f"{explorer_multiplier:.1f}'. The {current_floor:.2f} value is a "
-                        "fraud-risk eligibility threshold, not an alert count."
-                    )
-
-                    st.info(
-                        f"Analyst capacity is another separate constraint. Even if Adaptive "
-                        f"creates more candidate alerts, only {int(alert_budget_per_step)} "
-                        "can be investigated in each chronological step."
-                    )
-
-                with st.expander(
-                    "Does the Budget Multiplier lower the 0.50 threshold?",
-                    expanded=False,
-                ):
-                    st.markdown(
-                        f"""
-                        **No. This distinction is important.**
-
-                        The Static policy uses **{current_static_threshold:.2f}** as its
-                        candidate cut-off.
-
-                        The Adaptive `risk_zone` policy instead uses:
-
-                        - minimum fraud-risk floor: **{current_floor:.2f}**
-                        - positive expected-benefit requirement
-                        - operational **Rank score** ordering
-                        - global alert budget: **{adaptive_global_budget:,}**
-
-                        The multiplier therefore **changes how many ranked Adaptive candidates
-                        may be selected**. It does not mathematically transform
-                        `{current_static_threshold:.2f}` into a new threshold.
-
-                        Under the `risk_zone` ranking used here, eligible cases are ordered by
-                        operational priority (`Rank score`), which combines fraud risk with
-                        transaction amount. The budget determines how far down that ranked
-                        eligible list the policy is allowed to go.
-                        """
-                    )
-
-                    st.markdown(
-                        f"""
-                        **Think of it as two different gates**
-
-                        `Static: fraud risk ≥ {current_static_threshold:.2f}`
-
-                        `Adaptive: fraud risk ≥ {current_floor:.2f} + positive expected benefit
-                        → rank eligible cases → keep the top {adaptive_global_budget:,}`
-                        """
-                    )
-
-                with st.expander(
-                    f"How were the {candidate_alerts:,} Adaptive candidates in Step {int(selected_step)} selected?",
-                    expanded=False,
-                ):
-                    candidate_difference = (
-                        candidate_alerts - static_step_candidates
-                        if static_step_candidates is not None
-                        else None
-                    )
-
-                    relative_difference = (
-                        candidate_difference / static_step_candidates
-                        if (
-                            candidate_difference is not None
-                            and static_step_candidates not in (None, 0)
-                        )
-                        else None
-                    )
-
-                    local_expansion = (
-                        candidate_alerts / static_step_candidates
-                        if static_step_candidates not in (None, 0)
-                        else None
-                    )
-
-                    rate_change_pp = (
-                        (candidate_rate - static_step_rate) * 100
-                        if static_step_rate is not None
-                        else None
-                    )
-
-                    st.markdown("#### 1. Risk eligibility")
-
-                    g1, g2, g3 = st.columns(3)
-
-                    with g1:
-                        st.metric(
-                            f"Score ≥ {current_static_threshold:.2f}",
-                            f"{adaptive_high_score:,}",
-                        )
-                        st.caption(
-                            "Adaptive candidates that also satisfy the Static cut-off."
-                        )
-
-                    with g2:
-                        st.metric(
-                            f"Score {current_floor:.2f}–{current_static_threshold:.2f}",
-                            f"{adaptive_risk_zone:,}",
-                        )
-                        st.caption(
-                            "Additional candidates available to Adaptive below the Static cut-off."
-                        )
-
-                    with g3:
-                        st.metric(
-                            f"Score < {current_floor:.2f}",
-                            f"{adaptive_below_floor:,}",
-                        )
-                        st.caption(
-                            "Expected to be zero when the current minimum-risk rule is active."
-                        )
-
-                    st.markdown(
-                        f"""
-                        Among the **{candidate_alerts:,} Adaptive candidates selected in
-                        Step {int(selected_step)}**:
-
-                        `{adaptive_high_score:,} above/at {current_static_threshold:.2f}`
-                        ` + {adaptive_risk_zone:,} in the {current_floor:.2f}–{current_static_threshold:.2f} zone`
-                        ` = {adaptive_high_score + adaptive_risk_zone:,}`
-
-                        The **{adaptive_risk_zone:,}** cases in the lower risk zone are the
-                        clearest numerical difference from Static: they do not satisfy the
-                        Static **{current_static_threshold:.2f}** threshold but can still be
-                        available to the Adaptive policy.
-                        """
-                    )
-
-                    if adaptive_min_score is not None:
-                        s1, s2, s3 = st.columns(3)
-                        with s1:
-                            st.metric(
-                                "Lowest selected fraud risk",
-                                f"{adaptive_min_score:.1%}",
-                            )
-                        with s2:
-                            st.metric(
-                                "Median selected fraud risk",
-                                f"{adaptive_median_score:.1%}",
-                            )
-                        with s3:
-                            st.metric(
-                                "Highest selected fraud risk",
-                                f"{adaptive_max_score:.1%}",
-                            )
-
-                    st.markdown("---")
-                    st.markdown("#### 2. Operational ranking")
-
-                    if adaptive_min_rank_score is not None:
-                        r1, r2, r3 = st.columns(3)
-
-                        with r1:
-                            st.metric(
-                                "Highest selected Rank score",
-                                f"{adaptive_max_rank_score:,.2f}",
-                            )
-                        with r2:
-                            st.metric(
-                                "Median selected Rank score",
-                                f"{adaptive_median_rank_score:,.2f}",
-                            )
-                        with r3:
-                            st.metric(
-                                "Lowest selected Rank score",
-                                f"{adaptive_min_rank_score:,.2f}",
-                            )
-
-                        st.caption(
-                            "Eligible transactions are prioritised by Rank score. "
-                            "The higher-ranked cases are selected first until the "
-                            "Adaptive policy budget is exhausted."
-                        )
-                    else:
-                        st.caption(
-                            "Rank-score statistics are not available in the current API payload."
-                        )
-
-                    st.markdown("---")
-                    st.markdown("#### 3. Adaptive policy budget")
-
-                    p1, p2, p3 = st.columns(3)
-
-                    with p1:
-                        st.metric(
-                            "Static global alerts",
+                            "Static alert volume",
                             f"{static_global_budget:,}",
                         )
-                    with p2:
+                    with b2:
                         st.metric(
-                            "Multiplier",
+                            "Budget Multiplier",
                             f"{explorer_multiplier:.1f}×",
                         )
-                    with p3:
+                    with b3:
                         st.metric(
-                            "Adaptive global budget",
+                            "Adaptive alert budget",
                             f"{adaptive_global_budget:,}",
                         )
 
                     st.markdown(
                         f"""
-                        The configured budget is calculated from the **global Static alert
-                        count**:
-
                         `{static_global_budget:,} × {explorer_multiplier:.1f}
-                        = {raw_budget:,.1f} → {adaptive_global_budget:,} slots`
+                        = {raw_budget:,.1f} → {adaptive_global_budget:,} alerts`
 
-                        This budget limits how many high-ranked Adaptive candidates can be
-                        selected across the complete evaluation. It is not applied as
-                        `{explorer_multiplier:.1f} × Step {int(selected_step)} alerts`.
+                        The multiplier changes **how many Adaptive alerts may be retained**.
+                        It does **not** multiply Fraud Risk, Amount or Rank Score, and it does
+                        not change analyst capacity.
                         """
                     )
 
                     st.markdown("---")
-                    st.markdown("#### 4. What happened in this step?")
+                    st.markdown("#### 3 · Adaptive determines which transactions are eligible")
+
+                    e1, e2, e3 = st.columns(3)
+                    with e1:
+                        st.metric(
+                            f"Risk ≥ {current_static_threshold:.2f}",
+                            f"{adaptive_high_score:,}",
+                        )
+                        st.caption(
+                            "Selected Adaptive alerts in this step that also pass the Static threshold."
+                        )
+                    with e2:
+                        st.metric(
+                            f"Risk {current_floor:.2f}–{current_static_threshold:.2f}",
+                            f"{adaptive_risk_zone:,}",
+                        )
+                        st.caption(
+                            "Selected alerts available to Adaptive below the Static threshold."
+                        )
+                    with e3:
+                        st.metric(
+                            f"Risk < {current_floor:.2f}",
+                            f"{adaptive_below_floor:,}",
+                        )
+                        st.caption(
+                            "Expected to be zero under the current Adaptive minimum-risk rule."
+                        )
+
+                    st.markdown(
+                        f"""
+                        The minimum Adaptive fraud-risk floor is **{current_floor:.2f}**.
+                        Transactions below that floor are not eligible for the current risk-zone
+                        alert pool.
+
+                        Eligible cases must also satisfy the decision layer's remaining
+                        selection conditions before ranking.
+                        """
+                    )
+
+                    st.markdown("---")
+                    st.markdown("#### 4 · The Adaptive alert budget is applied")
 
                     q1, q2, q3 = st.columns(3)
-
                     with q1:
                         st.metric(
-                            "Adaptive candidates",
+                            "Adaptive alerts in this step",
                             f"{candidate_alerts:,}",
                         )
                     with q2:
                         st.metric(
-                            "Investigated",
+                            "Investigated alerts",
                             f"{investigated_alerts:,} / {int(alert_budget_per_step):,}",
                         )
                     with q3:
                         st.metric(
-                            "Capacity rejected",
+                            "Alerts excluded by capacity",
                             f"{capacity_rejected_alerts:,}",
                         )
 
-                    if (
-                        static_step_candidates is not None
-                        and static_step_rate is not None
-                        and local_expansion is not None
-                    ):
-                        st.markdown("---")
-                        st.markdown("#### 5. Net Step-local effect versus Static")
+                    st.markdown(
+                        f"""
+                        The Adaptive policy has already decided which transactions are alerts
+                        before analyst capacity is applied.
 
-                        n1, n2, n3, n4 = st.columns(4)
+                        In Step {int(selected_step)}:
 
-                        with n1:
+                        - **{candidate_alerts:,} Adaptive alerts** were available.
+                        - Analyst capacity allowed **{int(alert_budget_per_step):,}**
+                          investigations.
+                        - **{investigated_alerts:,} alerts** entered investigation.
+                        - **{capacity_rejected_alerts:,} alerts** remained outside the
+                          investigation queue because higher-priority alerts filled the
+                          available capacity first.
+
+                        This is separate from the Budget Multiplier: the multiplier controls the
+                        Adaptive **alert budget**, while analyst capacity controls how many of
+                        those alerts can actually be investigated in each step.
+                        """
+                    )
+
+                    st.markdown("#### 5 · Alerts are prioritised by Rank Score")
+
+                    if adaptive_min_rank_score is not None:
+                        r1, r2, r3 = st.columns(3)
+                        with r1:
                             st.metric(
-                                "Static candidates",
-                                f"{static_step_candidates:,}",
-                                f"{static_step_rate:.1%} of step",
+                                "Highest selected Rank Score",
+                                f"{adaptive_max_rank_score:,.2f}",
+                            )
+                        with r2:
+                            st.metric(
+                                "Median selected Rank Score",
+                                f"{adaptive_median_rank_score:,.2f}",
+                            )
+                        with r3:
+                            st.metric(
+                                "Lowest selected Rank Score",
+                                f"{adaptive_min_rank_score:,.2f}",
                             )
 
-                        with n2:
-                            st.metric(
-                                "Adaptive candidates",
-                                f"{candidate_alerts:,}",
-                                f"{candidate_rate:.1%} of step",
-                            )
+                    st.markdown(
+                        f"""
+                        **What does Rank Score do?**
 
-                        with n3:
-                            st.metric(
-                                "Additional candidates",
-                                f"{candidate_difference:+,}",
-                                (
-                                    f"{relative_difference:+.1%} vs Static"
-                                    if relative_difference is not None
-                                    else None
-                                ),
-                            )
+                        Rank Score does **not** decide whether an alert is eligible. Eligibility
+                        is handled first by the Adaptive rules, including the minimum fraud-risk
+                        floor of **{current_floor:.2f}**.
 
-                        with n4:
-                            st.metric(
-                                "Observed local expansion",
-                                f"{local_expansion:.2f}×",
-                                (
-                                    f"{rate_change_pp:+.1f} pp"
-                                    if rate_change_pp is not None
-                                    else None
-                                ),
-                            )
+                        Once an alert is eligible, Rank Score determines **its position relative
+                        to the other eligible alerts**.
 
-                        st.caption(
-                            f"The {explorer_multiplier:.1f}× multiplier is a global setting. "
-                            f"The observed Step-{int(selected_step)} effect is "
-                            f"{local_expansion:.2f}× because global ranking determines how "
-                            "many selected candidates fall into each chronological step."
+                        The current cost-aware ranking logic considers:
+
+                        - **Fraud risk** — the model-estimated probability of fraud.
+                        - **Transaction amount** — larger potential exposure increases the
+                          operational importance of a case.
+                        - **False-negative factor** — increases the estimated consequence of
+                          missing a fraud.
+                        - **Investigation-cost assumption** — represents the estimated cost
+                          of reviewing an alert.
+
+                        One intermediate quantity used by the cost-aware logic is:
+
+                        `Expected fraud loss = Fraud risk × Amount × False-negative factor`
+
+                        This is compared with the expected investigation-cost exposure and feeds
+                        the operational **Rank Score** used to order alerts.
+
+                        **Higher Rank Score = higher investigation priority.**
+
+                        There is **no fixed Rank Score threshold** such as
+                        `Rank Score ≥ 25`. The score is used for ordering. The Budget Multiplier
+                        then determines how many alerts from that ordered list may be retained.
+                        """
+                    )
+
+                    st.info(
+                        "Budget Multiplier does not change Fraud Risk, Amount or the Rank Score "
+                        "formula. It changes only the size of the Adaptive alert budget after "
+                        "eligible alerts have been ranked."
+                    )
+
+                # --------------------------------------------------------
+                # 2. KEEP THE PER-STEP DISTRIBUTION TABLE
+                # --------------------------------------------------------
+                with st.expander(
+                    "How is the Adaptive alert budget distributed across steps?",
+                    expanded=False,
+                ):
+                    st.caption(
+                        "This table shows where the selected alerts occur across "
+                        "the chronological replay. The Total row links the step-level results "
+                        "back to the global Budget Multiplier calculation."
+                    )
+
+                    distribution_static = pd.DataFrame(
+                        explorer_data.get("static_sequential", {}).get(
+                            "operational_steps",
+                            [],
+                        )
+                    )
+                    distribution_adaptive = pd.DataFrame(
+                        explorer_data.get("adaptive_sequential", {}).get(
+                            "operational_steps",
+                            [],
+                        )
+                    )
+
+                    if distribution_static.empty or distribution_adaptive.empty:
+                        st.info(
+                            "Per-step Static and Adaptive data are not available in the current API response."
                         )
                     else:
-                        st.caption(
-                            "A Step-local Static-vs-Adaptive expansion ratio cannot be "
-                            "calculated from the current API payload, so the dashboard "
-                            "does not display one."
+                        static_cols = distribution_static.copy()
+                        adaptive_cols = distribution_adaptive.copy()
+
+                        static_cols["step"] = pd.to_numeric(
+                            static_cols["step"],
+                            errors="coerce",
+                        )
+                        adaptive_cols["step"] = pd.to_numeric(
+                            adaptive_cols["step"],
+                            errors="coerce",
                         )
 
-                if local_expansion is not None and static_step_candidates is not None:
-                    with st.expander(
-                        f"Why is the Step {int(selected_step)} expansion different from "
-                        f"{explorer_multiplier:.1f}×?",
-                        expanded=False,
-                    ):
+                        static_cols["candidate_alerts"] = pd.to_numeric(
+                            static_cols.get("candidate_alerts"),
+                            errors="coerce",
+                        ).fillna(0)
+
+                        adaptive_cols["candidate_alerts"] = pd.to_numeric(
+                            adaptive_cols.get("candidate_alerts"),
+                            errors="coerce",
+                        ).fillna(0)
+
+                        if "transactions_processed" in adaptive_cols.columns:
+                            adaptive_cols["transactions_processed"] = pd.to_numeric(
+                                adaptive_cols["transactions_processed"],
+                                errors="coerce",
+                            )
+                        elif "transactions_processed" in static_cols.columns:
+                            adaptive_cols = adaptive_cols.merge(
+                                static_cols[
+                                    ["step", "transactions_processed"]
+                                ],
+                                on="step",
+                                how="left",
+                            )
+                        else:
+                            adaptive_cols["transactions_processed"] = pd.NA
+
+                        distribution_table = adaptive_cols[
+                            [
+                                "step",
+                                "transactions_processed",
+                                "candidate_alerts",
+                            ]
+                        ].rename(
+                            columns={
+                                "step": "Step",
+                                "transactions_processed": "Transactions",
+                                "candidate_alerts": "Adaptive alerts",
+                            }
+                        )
+
+                        static_lookup = static_cols[
+                            ["step", "candidate_alerts"]
+                        ].rename(
+                            columns={
+                                "step": "Step",
+                                "candidate_alerts": "Static alerts",
+                            }
+                        )
+
+                        distribution_table = distribution_table.merge(
+                            static_lookup,
+                            on="Step",
+                            how="left",
+                        )
+
+                        distribution_table["Static threshold"] = float(
+                            current_static_threshold
+                        )
+                        distribution_table["Adaptive minimum threshold"] = float(
+                            current_floor
+                        )
+                        distribution_table["Budget multiplier"] = float(
+                            explorer_multiplier
+                        )
+
+                        distribution_table["Static alerts"] = pd.to_numeric(
+                            distribution_table["Static alerts"],
+                            errors="coerce",
+                        ).fillna(0).astype(int)
+
+                        distribution_table["Adaptive alerts"] = pd.to_numeric(
+                            distribution_table["Adaptive alerts"],
+                            errors="coerce",
+                        ).fillna(0).astype(int)
+
+                        distribution_table["Difference"] = (
+                            distribution_table["Adaptive alerts"]
+                            - distribution_table["Static alerts"]
+                        )
+
+                        distribution_table = distribution_table.sort_values(
+                            "Step"
+                        ).reset_index(drop=True)
+
+                        total_transactions = int(
+                            pd.to_numeric(
+                                distribution_table["Transactions"],
+                                errors="coerce",
+                            ).fillna(0).sum()
+                        )
+                        total_static_alerts = int(
+                            distribution_table["Static alerts"].sum()
+                        )
+                        total_adaptive_alerts = int(
+                            distribution_table["Adaptive alerts"].sum()
+                        )
+
+                        configured_adaptive_budget = int(
+                            explorer_data.get("parameters", {}).get(
+                                "adaptive_batch_alert_budget",
+                                adaptive_global_budget,
+                            )
+                        )
+
+                        total_row = pd.DataFrame(
+                            [
+                                {
+                                    "Step": "Total",
+                                    "Transactions": total_transactions,
+                                    "Static threshold": float(
+                                        current_static_threshold
+                                    ),
+                                    "Static alerts": total_static_alerts,
+                                    "Budget multiplier": float(
+                                        explorer_multiplier
+                                    ),
+                                    "Adaptive minimum threshold": float(
+                                        current_floor
+                                    ),
+                                    "Adaptive alerts": total_adaptive_alerts,
+                                    "Difference": (
+                                        total_adaptive_alerts
+                                        - total_static_alerts
+                                    ),
+                                }
+                            ]
+                        )
+
+                        display_distribution = pd.concat(
+                            [
+                                distribution_table[
+                                    [
+                                        "Step",
+                                        "Transactions",
+                                        "Static threshold",
+                                        "Static alerts",
+                                        "Budget multiplier",
+                                        "Adaptive minimum threshold",
+                                        "Adaptive alerts",
+                                        "Difference",
+                                    ]
+                                ],
+                                total_row,
+                            ],
+                            ignore_index=True,
+                        )
+
+                        st.dataframe(
+                            display_distribution,
+                            width="stretch",
+                            hide_index=True,
+                            column_config={
+                                "Transactions": st.column_config.NumberColumn(
+                                    "Transactions",
+                                    format="%d",
+                                ),
+                                "Static threshold": st.column_config.NumberColumn(
+                                    "Static threshold",
+                                    format="%.2f",
+                                ),
+                                "Static alerts": st.column_config.NumberColumn(
+                                    "Static alerts",
+                                    format="%d",
+                                ),
+                                "Budget multiplier": st.column_config.NumberColumn(
+                                    "Budget multiplier",
+                                    format="%.1f×",
+                                ),
+                                "Adaptive minimum threshold": st.column_config.NumberColumn(
+                                    "Adaptive minimum threshold",
+                                    format="%.2f",
+                                ),
+                                "Adaptive alerts": st.column_config.NumberColumn(
+                                    "Adaptive alerts",
+                                    format="%d",
+                                ),
+                                "Difference": st.column_config.NumberColumn(
+                                    "Difference",
+                                    format="%+d",
+                                ),
+                            },
+                        )
+
                         st.markdown(
                             f"""
-                            **Configured global multiplier:** {explorer_multiplier:.1f}×  
-                            **Observed Step {int(selected_step)} expansion:**
-                            {local_expansion:.2f}×
+                            **Global-to-step accounting**
 
-                            These are different quantities.
-
-                            The configured multiplier determines the **global Adaptive
-                            candidate budget**. After ranking and global selection, the
-                            selected transactions are replayed chronologically. Step
-                            {int(selected_step)} therefore receives **{candidate_alerts:,}**
-                            of those candidates.
-
-                            Correct interpretation:
-
-                            `{explorer_multiplier:.1f}× global budget`
-                            `→ global ranked selection`
-                            `→ {candidate_alerts:,} candidates in Step {int(selected_step)}`
-
-                            Not:
-
-                            `{explorer_multiplier:.1f} × {static_step_candidates:,}
-                            Step-{int(selected_step)} Static alerts`
+                            Static total: **{total_static_alerts:,} alerts**  
+                            Budget calculation:
+                            **{total_static_alerts:,} × {explorer_multiplier:.1f}
+                            = {total_static_alerts * explorer_multiplier:,.1f}**  
+                            Configured Adaptive ceiling:
+                            **{configured_adaptive_budget:,} alerts**  
+                            Actual Adaptive alerts across all steps:
+                            **{total_adaptive_alerts:,}**
                             """
                         )
+
+                        if total_adaptive_alerts == configured_adaptive_budget:
+                            st.success(
+                                "The step-level Adaptive alert counts sum exactly to "
+                                "the configured Adaptive alert budget."
+                            )
+                        elif total_adaptive_alerts < configured_adaptive_budget:
+                            st.info(
+                                f"The returned Adaptive alert pool uses "
+                                f"{total_adaptive_alerts:,} of {configured_adaptive_budget:,} "
+                                f"available alerts. The remaining "
+                                f"{configured_adaptive_budget - total_adaptive_alerts:,} "
+                                "alerts are unfilled in the returned policy output. "
+                                "This should not be interpreted as a fixed Rank-Score threshold."
+                            )
+                        else:
+                            st.warning(
+                                "The step-level Adaptive alert total exceeds the configured "
+                                "budget. Check API accounting before interpreting this scenario."
+                            )
+
+                # --------------------------------------------------------
+                # 3. KEEP THE TRANSACTION-LEVEL CHANGE TABLE
+                # --------------------------------------------------------
+                with st.expander(
+                    f"Which alerts are added relative to the 1.0× reference?",
+                    expanded=False,
+                ):
+                    reference_multiplier = 1.0
+                    reference_params = dict(params)
+                    reference_params["budget_multiplier"] = reference_multiplier
+
+                    try:
+                        reference_data = load_step_explorer_data(reference_params)
+                    except requests.exceptions.RequestException:
+                        reference_data = None
+
+                    reference_rows = pd.DataFrame(
+                        (
+                            reference_data.get("adaptive_sequential", {}).get(
+                                "decision_rows",
+                                [],
+                            )
+                            if reference_data is not None
+                            else []
+                        )
+                    )
+                    current_rows = pd.DataFrame(
+                        explorer_data.get("adaptive_sequential", {}).get(
+                            "decision_rows",
+                            [],
+                        )
+                    )
+
+                    if reference_rows.empty or current_rows.empty:
+                        st.info(
+                            "Transaction-level Adaptive rows are not available for this comparison."
+                        )
+                    else:
+                        for frame in (reference_rows, current_rows):
+                            frame["transaction_id"] = frame["transaction_id"].astype(str)
+                            for column in ["fraud_score", "rank_score", "amount", "step"]:
+                                frame[column] = pd.to_numeric(
+                                    frame.get(column),
+                                    errors="coerce",
+                                )
+
+                        reference_ids = set(reference_rows["transaction_id"].dropna())
+                        current_ids = set(current_rows["transaction_id"].dropna())
+                        added_ids = current_ids - reference_ids
+                        removed_ids = reference_ids - current_ids
+
+                        reference_budget = i(
+                            (reference_data or {}).get("parameters", {}).get(
+                                "adaptive_batch_alert_budget",
+                                0,
+                            )
+                        )
+                        current_budget = i(
+                            explorer_data.get("parameters", {}).get(
+                                "adaptive_batch_alert_budget",
+                                adaptive_global_budget,
+                            )
+                        )
+                        extra_budget_alerts = current_budget - reference_budget
+
+                        m1, m2, m3 = st.columns(3)
+                        with m1:
+                            st.metric(
+                                "1.0× reference budget",
+                                f"{reference_budget:,}",
+                            )
+                        with m2:
+                            st.metric(
+                                f"{explorer_multiplier:.1f}× current budget",
+                                f"{current_budget:,}",
+                                f"{extra_budget_alerts:+,} maximum alerts",
+                            )
+                        with m3:
+                            st.metric(
+                                "Actual alerts added",
+                                f"{len(added_ids):,}",
+                            )
+
+                        st.caption(
+                            "The maximum budget increase and the number of newly observed "
+                            "alert transaction IDs are different quantities. Rank Score "
+                            "orders eligible cases; the Budget Multiplier changes how many "
+                            "ranked cases may be retained."
+                        )
+
+                        if removed_ids:
+                            st.caption(
+                                f"{len(removed_ids):,} reference alerts are absent from "
+                                "the current alert set. They are kept separate from the "
+                                "added-alert count rather than being hidden in a net difference."
+                            )
+
+                        if added_ids:
+                            added_df = current_rows[
+                                current_rows["transaction_id"].isin(added_ids)
+                            ].copy()
+
+                            added_df["Transaction"] = added_df["transaction_id"].map(
+                                lambda value: f"TX-{value}"
+                            )
+                            added_df["Fraud risk (%)"] = added_df["fraud_score"] * 100.0
+
+                            added_df = added_df.sort_values(
+                                ["rank_score", "fraud_score"],
+                                ascending=[False, False],
+                                na_position="last",
+                            )
+
+                            st.dataframe(
+                                added_df[
+                                    [
+                                        "Transaction",
+                                        "step",
+                                        "type",
+                                        "Fraud risk (%)",
+                                        "amount",
+                                        "rank_score",
+                                    ]
+                                ].rename(
+                                    columns={
+                                        "step": "Step",
+                                        "type": "Type",
+                                        "amount": "Amount",
+                                        "rank_score": "Rank Score",
+                                    }
+                                ),
+                                width="stretch",
+                                hide_index=True,
+                                column_config={
+                                    "Fraud risk (%)": st.column_config.NumberColumn(
+                                        "Fraud risk",
+                                        format="%.1f%%",
+                                    ),
+                                    "Amount": st.column_config.NumberColumn(
+                                        "Amount",
+                                        format="€%.2f",
+                                    ),
+                                    "Rank Score": st.column_config.NumberColumn(
+                                        "Rank Score",
+                                        format="%.2f",
+                                    ),
+                                },
+                            )
+
+                            in_risk_zone = int(
+                                (
+                                    (added_df["fraud_score"] >= float(current_floor))
+                                    & (
+                                        added_df["fraud_score"]
+                                        < float(current_static_threshold)
+                                    )
+                                ).sum()
+                            )
+                            above_static = int(
+                                (
+                                    added_df["fraud_score"]
+                                    >= float(current_static_threshold)
+                                ).sum()
+                            )
+
+                            z1, z2 = st.columns(2)
+                            with z1:
+                                st.metric(
+                                    f"Added in {current_floor:.2f}–{current_static_threshold:.2f} risk zone",
+                                    f"{in_risk_zone:,}",
+                                )
+                            with z2:
+                                st.metric(
+                                    f"Added at ≥ {current_static_threshold:.2f} fraud risk",
+                                    f"{above_static:,}",
+                                )
+
+                            example = added_df.iloc[0]
+                            st.markdown("#### One added alert")
+                            st.markdown(
+                                f"""
+                                **{example['Transaction']}** · Step **{i(example.get('step'))}**
+
+                                Fraud risk: **{n(example.get('fraud_score')):.1%}**  
+                                Amount: **€{n(example.get('amount')):,.2f}**  
+                                Rank Score: **{n(example.get('rank_score')):,.2f}**
+
+                                This transaction first satisfies Adaptive eligibility, then receives
+                                its place in the ranked list. It is absent from the 1.0× reference
+                                alert set but present under the larger
+                                **{explorer_multiplier:.1f}×** alert budget.
+                                """
+                            )
+                        else:
+                            st.info(
+                                "No new alert transaction IDs are added relative to the "
+                                "1.0× reference under the current setting."
+                            )
 
             # Compare a local Adaptive multiplier against the baseline dashboard setting.
             if (
@@ -2855,7 +3102,7 @@ with workflow_tab:
 
                     if delta_candidates > 0 and delta_investigated == 0:
                         st.caption(
-                            "The larger Adaptive budget created more candidate alerts, "
+                            "The larger Adaptive budget created more alerts, "
                             "but analyst capacity prevented additional investigations in "
                             "this step. This indicates a capacity bottleneck."
                         )
@@ -2919,7 +3166,7 @@ with workflow_tab:
             # Transaction-level drill-down.
             st.markdown("#### Alerts in this step")
             st.caption(
-                "Inspect the candidate alerts behind the selected step. Priority categories "
+                "Inspect the alerts behind the selected step. Priority categories "
                 "are derived from the actual per-step queue and analyst-capacity cut-off."
             )
 
@@ -2961,7 +3208,7 @@ with workflow_tab:
 
                 if step_alerts.empty:
                     st.info(
-                        f"No candidate alerts were returned for Step {int(selected_step)}."
+                        f"No alerts were returned for Step {int(selected_step)}."
                     )
                 else:
                     step_alerts["Priority rank"] = pd.to_numeric(
@@ -3130,7 +3377,7 @@ with workflow_tab:
                             )
                         else:
                             empty_reason = (
-                                "No candidate alert matches the selected combination "
+                                "No alert matches the selected combination "
                                 "of decision and retrospective outcome filters."
                             )
 
@@ -3140,7 +3387,7 @@ with workflow_tab:
                     else:
                         st.caption(
                             f"Showing {len(filtered_step_alerts):,} of "
-                            f"{len(step_alerts):,} candidate alerts in "
+                            f"{len(step_alerts):,} alerts in "
                             f"Step {int(selected_step)}."
                         )
 
@@ -3313,7 +3560,7 @@ with workflow_tab:
 
             **Role in this dashboard**  
             Transactions are processed in step order. Within each of the
-            **{unique_steps} operational steps** in the selected replay, candidate alerts
+            **{unique_steps} operational steps** in the selected replay, alerts
             are ranked, repeat-alert suppression is applied and the analyst limit of
             **{int(alert_budget_per_step)} alerts per step** is enforced independently.
             When the replay moves to the next step, the analyst limit is reset. Unused
