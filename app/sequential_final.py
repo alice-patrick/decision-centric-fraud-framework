@@ -2946,20 +2946,32 @@ with workflow_tab:
 
                         st.markdown(
                             f"""
-                            After eligibility is checked, the backend sorts eligible alerts by
-                            **Rank Score from highest to lowest** and retains up to the Adaptive
-                            alert budget.
+                            The **Budget Multiplier is applied to the already ranked list of
+                            eligible alerts** and determines **how many of those alerts may be
+                            retained**.
 
                             There is **no predefined Rank Score threshold** such as
-                            `Rank Score ≥ 25`.
+                            `Rank Score ≥ 25`. Instead, the effective cut-off **emerges dynamically**
+                            from:
 
-                            The sequence is:
+                            - the position of each alert in the Rank Score ordering, and
+                            - the Adaptive alert budget produced by the selected Budget Multiplier.
+
+                            In other words, the system does not ask:
+
+                            `Does this alert exceed a fixed Rank Score threshold?`
+
+                            It asks:
+
+                            `How many of the highest-ranked eligible alerts can the current Adaptive budget retain?`
+
+                            **The sequence is:**
 
                             `Fraud Risk ≥ {current_floor:.2f}`
-                            **and**
-                            `Expected Benefit > 0`
-                            → `sort by Rank Score`
-                            → `keep up to {adaptive_global_budget:,} alerts`
+                            → `Expected Benefit > 0`
+                            → `Rank Score calculated`
+                            → `alerts ordered from highest to lowest Rank Score`
+                            → `Budget Multiplier determines how many alerts are retained`
 
                             The Budget Multiplier therefore changes the **maximum number of
                             alerts that may be retained**. It does not alter Fraud Risk,
