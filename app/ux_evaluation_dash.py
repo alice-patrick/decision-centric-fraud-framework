@@ -1905,21 +1905,138 @@ with workflow_tab:
     # 1. HOW THE SEQUENTIAL PROCESS WORKS
     # --------------------------------------------------------
     st.markdown("### Seven-step decision process")
+    st.caption(
+        "Follow the complete operational flow from the original transaction data "
+        "to the final evaluation outcome."
+    )
 
-    compact_steps = [
-        ("1. Transactions arrive", "Historical transactions are replayed chronologically."),
-        ("2. Fraud risk is calculated", "The fixed ML model assigns a fraud-risk score."),
-        ("3. Alerts are created", "Static or Adaptive decision rules determine which transactions become alerts."),
-        ("4. Repeated alerts may be suppressed", "Duplicate entity alerts may be filtered."),
-        ("5. Alerts are prioritised", "Higher-priority cases are considered first."),
-        ("6. Analyst capacity is applied", "Only alerts within each step limit enter the queue."),
-        ("7. Outcomes are evaluated", "Investigated alerts are compared with fraud labels."),
+    technical_flow = [
+        {
+            "step": "1",
+            "title": "Transactions arrive",
+            "input": "7 original PaySim fields",
+            "action": "Transactions are replayed in chronological step order.",
+            "output": "Transaction ready for feature processing",
+        },
+        {
+            "step": "2",
+            "title": "Fraud risk",
+            "input": "7 original fields + 5 engineered features",
+            "action": "The Logistic Regression pipeline processes 12 model inputs.",
+            "output": "Fraud Risk (fraud_score)",
+        },
+        {
+            "step": "3",
+            "title": "Alert selection",
+            "input": "Fraud Risk + decision parameters",
+            "action": (
+                "Static or Adaptive rules determine which transactions "
+                "become candidate alerts."
+            ),
+            "output": "Candidate alerts",
+        },
+        {
+            "step": "4",
+            "title": "Suppression",
+            "input": "Candidate alerts + simulated entity history",
+            "action": (
+                "Repeated alerts may be filtered within the suppression window."
+            ),
+            "output": "Eligible alerts",
+        },
+        {
+            "step": "5",
+            "title": "Prioritisation",
+            "input": "Eligible alerts + Rank Score",
+            "action": "Eligible alerts are ordered by operational priority.",
+            "output": "Prioritised alerts",
+        },
+        {
+            "step": "6",
+            "title": "Analyst capacity",
+            "input": "Prioritised alerts + per-step capacity",
+            "action": (
+                f"At most {int(alert_budget_per_step):,} alerts per operational "
+                "step enter investigation."
+            ),
+            "output": "Investigated / capacity-rejected alerts",
+        },
+        {
+            "step": "7",
+            "title": "Outcomes",
+            "input": "Investigation decisions + isFraud",
+            "action": (
+                "Decisions are compared retrospectively with known fraud labels."
+            ),
+            "output": "Detection, precision, recall and cost metrics",
+        },
     ]
 
-    for index, (title, explanation) in enumerate(compact_steps):
-        workflow_step(title, explanation)
-        if index < len(compact_steps) - 1:
-            arrow()
+    for index, item in enumerate(technical_flow):
+        # Build the HTML as a single unindented string so Streamlit renders
+        # the card instead of displaying the HTML source as a code block.
+        card_html = (
+            '<div style="'
+            'border:1px solid rgba(255,255,255,.12);'
+            'border-radius:12px;'
+            'background:rgba(255,255,255,.018);'
+            'padding:.85rem 1rem;'
+            '">'
+            '<div style="display:flex;align-items:center;gap:.65rem;margin-bottom:.72rem;">'
+            '<div style="'
+            'width:30px;height:30px;border-radius:50%;'
+            'background:rgba(25,118,210,.13);'
+            'border:1px solid rgba(25,118,210,.35);'
+            'display:flex;align-items:center;justify-content:center;'
+            'font-weight:700;flex:0 0 auto;'
+            '">'
+            f'{html.escape(item["step"])}'
+            '</div>'
+            '<div style="font-weight:700;font-size:1rem;">'
+            f'{html.escape(item["title"])}'
+            '</div>'
+            '</div>'
+            '<div style="'
+            'display:grid;'
+            'grid-template-columns:minmax(0,1fr) minmax(0,1.35fr) minmax(0,1fr);'
+            'gap:1rem;'
+            '">'
+            '<div>'
+            '<div style="font-size:.72rem;opacity:.60;text-transform:uppercase;'
+            'letter-spacing:.04em;margin-bottom:.2rem;">Input</div>'
+            '<div style="font-size:.88rem;line-height:1.4;">'
+            f'{html.escape(item["input"])}'
+            '</div>'
+            '</div>'
+            '<div>'
+            '<div style="font-size:.72rem;opacity:.60;text-transform:uppercase;'
+            'letter-spacing:.04em;margin-bottom:.2rem;">Processing</div>'
+            '<div style="font-size:.88rem;line-height:1.4;">'
+            f'{html.escape(item["action"])}'
+            '</div>'
+            '</div>'
+            '<div>'
+            '<div style="font-size:.72rem;opacity:.60;text-transform:uppercase;'
+            'letter-spacing:.04em;margin-bottom:.2rem;">Output</div>'
+            '<div style="font-size:.88rem;line-height:1.4;font-weight:600;">'
+            f'{html.escape(item["output"])}'
+            '</div>'
+            '</div>'
+            '</div>'
+            '</div>'
+        )
+
+        st.markdown(
+            card_html,
+            unsafe_allow_html=True,
+        )
+
+        if index < len(technical_flow) - 1:
+            st.markdown(
+                '<div style="text-align:center;height:22px;line-height:22px;'
+                'opacity:.40;font-size:.95rem;">↓</div>',
+                unsafe_allow_html=True,
+            )
 
     st.markdown(
         f"""
@@ -1933,177 +2050,39 @@ with workflow_tab:
         """,
         unsafe_allow_html=True,
     )
+
     with st.expander(
-        "How does information move through the 7 steps?",
+        "What are the 12 model inputs?",
         expanded=False,
     ):
-        st.caption(
-            "A compact technical map of the same seven stages. "
-            "Open the model-input note only if you want the feature-level detail."
+        st.markdown(
+            """
+            **7 original PaySim fields**
+
+            `step`, `type`, `amount`, `oldbalanceOrg`, `newbalanceOrig`,
+            `oldbalanceDest`, `newbalanceDest`
+
+            **+ 5 engineered features**
+
+            `log_amount`, `origin_balance_error`,
+            `destination_balance_error`,
+            `abs_origin_balance_error`,
+            `abs_destination_balance_error`
+
+            Together these form **12 model inputs: 11 numerical features
+            + 1 categorical feature (`type`)**.
+
+            These inputs are processed by the ML pipeline to estimate
+            **Fraud Risk (`fraud_score`)**.
+
+            For example, `fraud_score = 0.42` means an estimated
+            **42% probability of fraud**.
+
+            Fraud Risk is a model prediction. It does **not** by itself
+            mean that a transaction becomes an alert or that an analyst
+            investigates it.
+            """
         )
-
-        technical_flow = [
-            {
-                "step": "1",
-                "title": "Transactions arrive",
-                "input": "7 original PaySim fields",
-                "action": "Transactions are replayed in chronological step order.",
-                "output": "Transaction ready for feature processing",
-            },
-            {
-                "step": "2",
-                "title": "Fraud risk",
-                "input": "7 original fields + 5 engineered features",
-                "action": "The Logistic Regression pipeline processes 12 model inputs.",
-                "output": "Fraud Risk (fraud_score)",
-            },
-            {
-                "step": "3",
-                "title": "Alert selection",
-                "input": "Fraud Risk + decision parameters",
-                "action": (
-                    "Static or Adaptive rules determine which transactions "
-                    "become candidate alerts."
-                ),
-                "output": "Candidate alerts",
-            },
-            {
-                "step": "4",
-                "title": "Suppression",
-                "input": "Candidate alerts + simulated entity history",
-                "action": (
-                    "Repeated alerts may be filtered within the suppression window."
-                ),
-                "output": "Eligible alerts",
-            },
-            {
-                "step": "5",
-                "title": "Prioritisation",
-                "input": "Eligible alerts + Rank Score",
-                "action": "Eligible alerts are ordered by operational priority.",
-                "output": "Prioritised alerts",
-            },
-            {
-                "step": "6",
-                "title": "Analyst capacity",
-                "input": "Prioritised alerts + per-step capacity",
-                "action": (
-                    f"At most {int(alert_budget_per_step):,} alerts per operational "
-                    "step enter investigation."
-                ),
-                "output": "Investigated / capacity-rejected alerts",
-            },
-            {
-                "step": "7",
-                "title": "Outcomes",
-                "input": "Investigation decisions + isFraud",
-                "action": (
-                    "Decisions are compared retrospectively with known fraud labels."
-                ),
-                "output": "Detection, precision, recall and cost metrics",
-            },
-        ]
-
-        for index, item in enumerate(technical_flow):
-            # IMPORTANT: build the HTML without Markdown-leading indentation.
-            # Otherwise Streamlit can interpret the HTML as a Markdown code block
-            # and show the raw <div> tags on screen.
-            card_html = (
-                '<div style="'
-                'border:1px solid rgba(255,255,255,.12);'
-                'border-radius:12px;'
-                'background:rgba(255,255,255,.018);'
-                'padding:.85rem 1rem;'
-                '">'
-                '<div style="display:flex;align-items:center;gap:.65rem;margin-bottom:.72rem;">'
-                '<div style="'
-                'width:30px;height:30px;border-radius:50%;'
-                'background:rgba(25,118,210,.13);'
-                'border:1px solid rgba(25,118,210,.35);'
-                'display:flex;align-items:center;justify-content:center;'
-                'font-weight:700;flex:0 0 auto;'
-                '">'
-                f'{html.escape(item["step"])}'
-                '</div>'
-                '<div style="font-weight:700;font-size:1rem;">'
-                f'{html.escape(item["title"])}'
-                '</div>'
-                '</div>'
-                '<div style="'
-                'display:grid;'
-                'grid-template-columns:minmax(0,1fr) minmax(0,1.35fr) minmax(0,1fr);'
-                'gap:1rem;'
-                '">'
-                '<div>'
-                '<div style="font-size:.72rem;opacity:.60;text-transform:uppercase;'
-                'letter-spacing:.04em;margin-bottom:.2rem;">Input</div>'
-                '<div style="font-size:.88rem;line-height:1.4;">'
-                f'{html.escape(item["input"])}'
-                '</div>'
-                '</div>'
-                '<div>'
-                '<div style="font-size:.72rem;opacity:.60;text-transform:uppercase;'
-                'letter-spacing:.04em;margin-bottom:.2rem;">Processing</div>'
-                '<div style="font-size:.88rem;line-height:1.4;">'
-                f'{html.escape(item["action"])}'
-                '</div>'
-                '</div>'
-                '<div>'
-                '<div style="font-size:.72rem;opacity:.60;text-transform:uppercase;'
-                'letter-spacing:.04em;margin-bottom:.2rem;">Output</div>'
-                '<div style="font-size:.88rem;line-height:1.4;font-weight:600;">'
-                f'{html.escape(item["output"])}'
-                '</div>'
-                '</div>'
-                '</div>'
-                '</div>'
-            )
-
-            st.markdown(
-                card_html,
-                unsafe_allow_html=True,
-            )
-
-            if index < len(technical_flow) - 1:
-                st.markdown(
-                    '<div style="text-align:center;height:22px;line-height:22px;'
-                    'opacity:.40;font-size:.95rem;">↓</div>',
-                    unsafe_allow_html=True,
-                )
-
-        with st.expander(
-            "What are the 12 model inputs?",
-            expanded=False,
-        ):
-            st.markdown(
-                """
-                **7 original PaySim fields**
-
-                `step`, `type`, `amount`, `oldbalanceOrg`, `newbalanceOrig`,
-                `oldbalanceDest`, `newbalanceDest`
-
-                **+ 5 engineered features**
-
-                `log_amount`, `origin_balance_error`,
-                `destination_balance_error`,
-                `abs_origin_balance_error`,
-                `abs_destination_balance_error`
-
-                Together these form **12 model inputs: 11 numerical features
-                + 1 categorical feature (`type`)**.
-
-                These inputs are processed by the ML pipeline to estimate
-                **Fraud Risk (`fraud_score`)**.
-
-                For example, `fraud_score = 0.42` means an estimated
-                **42% probability of fraud**.
-
-                Fraud Risk is a model prediction. It does **not** by itself
-                mean that a transaction becomes an alert or that an analyst
-                investigates it.
-                """
-            )
-
 
     # --------------------------------------------------------
     # 2. OPERATIONAL STEP EXPLORER
@@ -2929,9 +2908,18 @@ with workflow_tab:
                         )
 
                         st.info(
-                            "False-Negative Factor and Investigation Cost participate in the "
-                            "Rank Score calculation. The Budget Multiplier does not. It is applied "
-                            "afterwards to control how many ranked Adaptive alerts may be retained."
+                            "**What happens next?**\n\n"
+                            "The Rank Score calculation is now complete. The alert has already "
+                            "passed the Adaptive eligibility rules and now has an operational "
+                            "priority relative to the other eligible alerts.\n\n"
+                            "**Rank Score does not decide investigation by itself.** All eligible "
+                            "alerts are first ordered from highest to lowest Rank Score. The next "
+                            "stage then uses the **Budget Multiplier** to determine how many alerts "
+                            "from this ordered list may be retained.\n\n"
+                            "**In short:** Fraud Risk + Amount + cost assumptions → Rank Score → "
+                            "priority order → Budget Multiplier cut-off.\n\n"
+                            "After that, suppression and per-step analyst capacity determine which "
+                            "retained alerts can ultimately reach investigation."
                         )
 
                     with st.expander(
