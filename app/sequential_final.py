@@ -2110,7 +2110,7 @@ with workflow_tab:
             with flow2:
                 candidate_card_text = (
                     f"{candidate_rate:.1%} of transactions. "
-                    f"This is the observed candidate-alert rate produced by the "
+                    f"This is the observed alert rate produced by the "
                     f"{explorer_policy} policy in this step."
                 )
                 if explorer_policy == "Adaptive":
@@ -2121,7 +2121,7 @@ with workflow_tab:
                     )
 
                 metric_card(
-                    "Candidate alerts",
+                    "Alerts",
                     f"{candidate_alerts:,}",
                     candidate_card_text,
                     "blue",
@@ -2292,6 +2292,12 @@ with workflow_tab:
                         static_threshold,
                     )
                 )
+                current_false_negative_factor = n(
+                    explorer_parameters.get(
+                        "false_negative_factor",
+                        1.0,
+                    )
+                )
                 raw_budget = static_global_budget * explorer_multiplier
 
                 adaptive_step_rows_for_explanation = pd.DataFrame(
@@ -2388,7 +2394,7 @@ with workflow_tab:
                     b1, b2, b3 = st.columns(3)
                     with b1:
                         st.metric(
-                            "Static candidate volume",
+                            "Static alert volume",
                             f"{static_global_budget:,}",
                         )
                     with b2:
@@ -2405,7 +2411,7 @@ with workflow_tab:
                     st.markdown(
                         f"""
                         `{static_global_budget:,} × {explorer_multiplier:.1f}
-                        = {raw_budget:,.1f} → {adaptive_global_budget:,} alert alerts`
+                        = {raw_budget:,.1f} → {adaptive_global_budget:,} alerts`
 
                         The multiplier changes **how many Adaptive alerts may be retained**.
                         It does **not** multiply Fraud Risk, Amount or Rank Score, and it does
@@ -2431,7 +2437,7 @@ with workflow_tab:
                             f"{adaptive_risk_zone:,}",
                         )
                         st.caption(
-                            "Selected candidates available to Adaptive below the Static threshold."
+                            "Selected alerts available to Adaptive below the Static threshold."
                         )
                     with e3:
                         st.metric(
@@ -2446,7 +2452,7 @@ with workflow_tab:
                         f"""
                         The minimum Adaptive fraud-risk floor is **{current_floor:.2f}**.
                         Transactions below that floor are not eligible for the current risk-zone
-                        candidate pool.
+                        alert pool.
 
                         Eligible cases must also satisfy the decision layer's remaining
                         selection conditions before ranking.
@@ -2518,42 +2524,282 @@ with workflow_tab:
                         f"""
                         **What does Rank Score do?**
 
-                        Rank Score does **not** decide whether an alert is eligible. Eligibility
-                        is handled first by the Adaptive rules, including the minimum fraud-risk
-                        floor of **{current_floor:.2f}**.
-
-                        Once an alert is eligible, Rank Score determines **its position relative
-                        to the other eligible alerts**.
-
-                        The current cost-aware ranking logic considers:
-
-                        - **Fraud risk** — the model-estimated probability of fraud.
-                        - **Transaction amount** — larger potential exposure increases the
-                          operational importance of a case.
-                        - **False-negative factor** — increases the estimated consequence of
-                          missing a fraud.
-                        - **Investigation-cost assumption** — represents the estimated cost
-                          of reviewing an alert.
-
-                        One intermediate quantity used by the cost-aware logic is:
-
-                        `Expected fraud loss = Fraud risk × Amount × False-negative factor`
-
-                        This is compared with the expected investigation-cost exposure and feeds
-                        the operational **Rank Score** used to order alerts.
-
-                        **Higher Rank Score = higher investigation priority.**
-
-                        There is **no fixed Rank Score threshold** such as
-                        `Rank Score ≥ 25`. The score is used for ordering. The Budget Multiplier
-                        then determines how many alerts from that ordered list may be retained.
+                        The system separates **prediction** from **operational prioritisation**.
+                        The ML model first estimates Fraud Risk from the transaction data. The
+                        Adaptive policy then decides which alerts are eligible, and Rank Score
+                        orders those eligible alerts for investigation.
                         """
                     )
 
+                    with st.expander(
+                        "1 · How the transaction data become a Fraud Risk score",
+                        expanded=False,
+                    ):
+                        st.markdown(
+                            """
+                            The model does not start with a ready-made fraud score. It first looks
+                            at information describing each PaySim transaction.
+
+                            **Original transaction fields**
+
+                            - **step** — the chronological PaySim period in which the transaction
+                              appears. It gives the model temporal context.
+                            - **type** — the kind of transaction, for example `TRANSFER` or
+                              `CASH_OUT`.
+                            - **amount** — the amount of money transferred.
+                            - **oldbalanceOrg** — the sender's balance before the transaction.
+                            - **newbalanceOrig** — the sender's balance after the transaction.
+                            - **oldbalanceDest** — the receiver's balance before the transaction.
+                            - **newbalanceDest** — the receiver's balance after the transaction.
+
+                            These original fields are also used to create **engineered features**.
+                            An engineered feature is simply a new variable calculated from the
+                            original data so that a pattern can be represented more clearly to
+                            the machine-learning model.
+
+                            **Engineered features**
+
+                            - **log_amount** — a transformed version of `amount`. Large transaction
+                              values can vary enormously, so the logarithmic transformation compresses
+                              the scale and makes differences easier for the model to learn.
+                            - **origin_balance_error** — measures whether the sender's recorded
+                              balance change is consistent with the transaction amount.
+                            - **destination_balance_error** — measures whether the receiver's
+                              recorded balance change is consistent with the transaction amount.
+                            - **abs_origin_balance_error** — keeps only the size of the sender-side
+                              balance inconsistency, regardless of whether it is positive or negative.
+                            - **abs_destination_balance_error** — keeps only the size of the
+                              receiver-side balance inconsistency.
+
+                            In total, the ML pipeline uses **12 input features**:
+                            **11 numerical features** and **1 categorical feature (`type`)**.
+
+                            The important point is that these features are used by the
+                            **prediction model**, not directly by the Adaptive decision rule.
+
+                            **Simple flow**
+
+                            `Original transaction data`
+                            → `engineered features`
+                            → `ML model`
+                            → **Fraud Risk**
+
+                            For example, if the model returns:
+
+                            `Fraud Risk = 0.42`
+
+                            this means the model estimates a **42% probability of fraud** for that
+                            transaction. It does **not** yet mean that the transaction becomes an
+                            Adaptive alert or that an analyst will investigate it.
+                            """
+                        )
+
+                    with st.expander(
+                        "2 · When is a transaction allowed into the Adaptive alert pool?",
+                        expanded=False,
+                    ):
+                        st.markdown(
+                            f"""
+                            The current `risk_zone` policy applies **two eligibility conditions**
+                            before the alert budget is used:
+
+                            **Condition A — minimum Fraud Risk**
+
+                            `Fraud Risk ≥ {current_floor:.2f}`
+
+                            **Condition B — positive Expected Benefit**
+
+                            `Expected Benefit > 0`
+
+                            An alert must satisfy **both** conditions before it can enter the
+                            ranked Adaptive pool.
+
+                            This is important because the **{current_floor:.2f} floor alone does
+                            not create an alert**. A transaction above the floor can still remain
+                            outside the Adaptive pool if its expected operational benefit is not
+                            positive.
+
+                            The engineered balance features do not enter this rule directly.
+                            Their contribution has already been absorbed into the model's
+                            **Fraud Risk**.
+                            """
+                        )
+
+                    with st.expander(
+                        "3 · How the system calculates operational priority",
+                        expanded=False,
+                    ):
+                        st.markdown(
+                            f"""
+                            Once a transaction passes the Adaptive eligibility rules, the
+                            system still has to answer a practical question:
+
+                            **Which eligible alert should be investigated first?**
+
+                            To answer that, the current `risk_zone` policy calculates an
+                            operational priority value called **Rank Score**. In this implementation,
+                            **Rank Score is exactly the Expected Benefit**.
+
+                            The calculation is performed in three stages.
+
+                            **A. Expected Fraud Loss**
+
+                            `Expected Fraud Loss = Fraud Risk × Amount × False-Negative Factor`
+
+                            Current False-Negative Factor:
+                            **{current_false_negative_factor:.1f}×**
+
+                            Because the current factor is
+                            **{current_false_negative_factor:.1f}×**, it scales the financial
+                            consequence assigned to potentially missing a fraud.
+
+                            **B. Expected Investigation Cost**
+
+                            `Expected Investigation Cost = (1 − Fraud Risk) × Investigation Cost`
+
+                            Current investigation-cost assumption:
+                            **€{float(investigation_cost):,.2f} per alert**
+
+                            The `(1 − Fraud Risk)` term represents the probability-weighted
+                            exposure to spending investigation effort on a transaction that is
+                            not fraudulent.
+
+                            **C. Expected Benefit / Rank Score**
+
+                            `Expected Benefit = Expected Fraud Loss − Expected Investigation Cost`
+
+                            and for the current `risk_zone` policy:
+
+                            `Rank Score = Expected Benefit`
+
+                            Therefore:
+
+                            `Rank Score =`
+                            `(Fraud Risk × Amount × False-Negative Factor)`
+                            `− ((1 − Fraud Risk) × Investigation Cost)`
+
+                            **Higher Rank Score = higher operational priority.**
+                            """
+                        )
+
+                        st.markdown("##### Numerical example")
+
+                        example_risk = 0.40
+                        example_amount = 10000.0
+                        example_loss = (
+                            example_risk
+                            * example_amount
+                            * current_false_negative_factor
+                        )
+                        example_review_cost = (
+                            (1.0 - example_risk)
+                            * float(investigation_cost)
+                        )
+                        example_benefit = (
+                            example_loss - example_review_cost
+                        )
+
+                        ex1, ex2, ex3 = st.columns(3)
+                        with ex1:
+                            st.metric(
+                                "Expected Fraud Loss",
+                                f"€{example_loss:,.2f}",
+                            )
+                        with ex2:
+                            st.metric(
+                                "Expected Investigation Cost",
+                                f"€{example_review_cost:,.2f}",
+                            )
+                        with ex3:
+                            st.metric(
+                                "Rank Score / Expected Benefit",
+                                f"{example_benefit:,.2f}",
+                            )
+
+                        st.caption(
+                            f"Example: 40% Fraud Risk, €10,000 amount, "
+                            f"{current_false_negative_factor:.1f}× False-Negative Factor "
+                            f"and €{float(investigation_cost):,.2f} investigation cost."
+                        )
+
+                    with st.expander(
+                        "4 · How the Budget Multiplier changes which alerts are kept",
+                        expanded=False,
+                    ):
+                        current_selected_total = i(
+                            explorer_data.get(
+                                "adaptive_batch",
+                                {},
+                            ).get(
+                                "summary",
+                                {},
+                            ).get(
+                                "selected_alerts",
+                                adaptive_global_budget,
+                            )
+                        )
+                        unused_global_budget = max(
+                            adaptive_global_budget
+                            - current_selected_total,
+                            0,
+                        )
+
+                        st.markdown(
+                            f"""
+                            After eligibility is checked, the backend sorts eligible alerts by
+                            **Rank Score from highest to lowest** and retains up to the Adaptive
+                            alert budget.
+
+                            There is **no predefined Rank Score threshold** such as
+                            `Rank Score ≥ 25`.
+
+                            The sequence is:
+
+                            `Fraud Risk ≥ {current_floor:.2f}`
+                            **and**
+                            `Expected Benefit > 0`
+                            → `sort by Rank Score`
+                            → `keep up to {adaptive_global_budget:,} alerts`
+
+                            The Budget Multiplier therefore changes the **maximum number of
+                            alerts that may be retained**. It does not alter Fraud Risk,
+                            Amount, the False-Negative Factor, or the Rank Score formula.
+
+                            **Current global accounting**
+
+                            Configured Adaptive alert budget:
+                            **{adaptive_global_budget:,}**
+
+                            Actual Adaptive alerts selected:
+                            **{current_selected_total:,}**
+
+                            Unused alert budget:
+                            **{unused_global_budget:,}**
+                            """
+                        )
+
+                        if unused_global_budget > 0:
+                            st.info(
+                                f"The {unused_global_budget:,} unused alert places are not "
+                                "lost because Rank Score became 'too low'. The backend simply "
+                                f"found only {current_selected_total:,} transactions satisfying "
+                                f"both Adaptive eligibility conditions: Fraud Risk ≥ "
+                                f"{current_floor:.2f} and Expected Benefit > 0. Since fewer "
+                                "eligible alerts existed than the configured maximum budget, "
+                                "the remaining alert budget could not be filled."
+                            )
+                        else:
+                            st.success(
+                                "The current Adaptive policy uses the complete configured "
+                                "alert budget."
+                            )
+
                     st.info(
-                        "Budget Multiplier does not change Fraud Risk, Amount or the Rank Score "
-                        "formula. It changes only the size of the Adaptive alert budget after "
-                        "eligible alerts have been ranked."
+                        "End-to-end flow: transaction fields and engineered features help the "
+                        "ML model estimate Fraud Risk. The Adaptive rules then decide whether an "
+                        "alert is eligible, Rank Score orders eligible alerts by operational "
+                        "priority, the Budget Multiplier limits how many alerts may be kept, and "
+                        "analyst capacity determines how many can actually be investigated."
                     )
 
                 # --------------------------------------------------------
@@ -2806,7 +3052,7 @@ with workflow_tab:
                             st.info(
                                 f"The returned Adaptive alert pool uses "
                                 f"{total_adaptive_alerts:,} of {configured_adaptive_budget:,} "
-                                f"available alert alerts. The remaining "
+                                f"available alerts. The remaining "
                                 f"{configured_adaptive_budget - total_adaptive_alerts:,} "
                                 "alerts are unfilled in the returned policy output. "
                                 "This should not be interpreted as a fixed Rank-Score threshold."
@@ -2902,16 +3148,16 @@ with workflow_tab:
 
                         st.caption(
                             "The maximum budget increase and the number of newly observed "
-                            "candidate transaction IDs are different quantities. Rank Score "
+                            "alert transaction IDs are different quantities. Rank Score "
                             "orders eligible cases; the Budget Multiplier changes how many "
                             "ranked cases may be retained."
                         )
 
                         if removed_ids:
                             st.caption(
-                                f"{len(removed_ids):,} reference candidates are absent from "
-                                "the current candidate set. They are kept separate from the "
-                                "added-candidate count rather than being hidden in a net difference."
+                                f"{len(removed_ids):,} reference alerts are absent from "
+                                "the current alert set. They are kept separate from the "
+                                "added-alert count rather than being hidden in a net difference."
                             )
 
                         if added_ids:
@@ -2995,7 +3241,7 @@ with workflow_tab:
                                 )
 
                             example = added_df.iloc[0]
-                            st.markdown("#### One added candidate")
+                            st.markdown("#### One added alert")
                             st.markdown(
                                 f"""
                                 **{example['Transaction']}** · Step **{i(example.get('step'))}**
@@ -3006,7 +3252,7 @@ with workflow_tab:
 
                                 This transaction first satisfies Adaptive eligibility, then receives
                                 its place in the ranked list. It is absent from the 1.0× reference
-                                candidate set but present under the larger
+                                alert set but present under the larger
                                 **{explorer_multiplier:.1f}×** alert budget.
                                 """
                             )
@@ -4728,7 +4974,7 @@ with sensitivity_tab:
                 </div>
                 """,
                 unsafe_allow_html=True,
-                )
+            )
 
         with insight_col_2:
             st.markdown(
