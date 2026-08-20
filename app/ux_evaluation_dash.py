@@ -1934,405 +1934,202 @@ with workflow_tab:
         unsafe_allow_html=True,
     )
 
-    with st.expander(
-        "See the full end-to-end decision flow",
-        expanded=False,
-    ):
+    with st.expander("How does information move through the 7 steps?", expanded=False):
         st.caption(
-            "The same seven stages shown above are expanded below. Each stage shows the "
-            "information it receives, what the system does with it, and what moves forward "
-            "to the next stage."
+            "A compact technical map of the same seven stages. "
+            "Open the model-input note only if you want the feature-level detail."
         )
 
-        # -----------------------------------------------------
-        # STEP 1
-        # -----------------------------------------------------
-        with st.container(border=True):
-            st.markdown("### 1 · Transactions arrive")
-            st.caption("Historical PaySim transactions are replayed chronologically.")
+        technical_flow = [
+            {
+                "step": "1",
+                "title": "Transactions arrive",
+                "input": "7 original PaySim fields",
+                "action": "Transactions are replayed in chronological step order.",
+                "output": "Transaction ready for feature processing",
+            },
+            {
+                "step": "2",
+                "title": "Fraud risk",
+                "input": "7 original fields + 5 engineered features",
+                "action": "The Logistic Regression pipeline processes 12 model inputs.",
+                "output": "Fraud Risk (fraud_score)",
+            },
+            {
+                "step": "3",
+                "title": "Alert selection",
+                "input": "Fraud Risk + decision parameters",
+                "action": "Static or Adaptive rules determine which transactions become candidate alerts.",
+                "output": "Candidate alerts",
+            },
+            {
+                "step": "4",
+                "title": "Suppression",
+                "input": "Candidate alerts + simulated entity history",
+                "action": "Repeated alerts may be filtered within the suppression window.",
+                "output": "Eligible alerts",
+            },
+            {
+                "step": "5",
+                "title": "Prioritisation",
+                "input": "Eligible alerts + Rank Score",
+                "action": "Eligible alerts are ordered by operational priority.",
+                "output": "Prioritised alerts",
+            },
+            {
+                "step": "6",
+                "title": "Analyst capacity",
+                "input": "Prioritised alerts + per-step capacity",
+                "action": (
+                    f"At most {int(alert_budget_per_step):,} alerts per operational step "
+                    "enter investigation."
+                ),
+                "output": "Investigated / capacity-rejected alerts",
+            },
+            {
+                "step": "7",
+                "title": "Outcomes",
+                "input": "Investigation decisions + isFraud",
+                "action": "Decisions are compared retrospectively with known fraud labels.",
+                "output": "Detection, precision, recall and cost metrics",
+            },
+        ]
 
-            c1, c2, c3 = st.columns([1.1, 1.6, 1.1])
+        for index, item in enumerate(technical_flow):
+            st.markdown(
+                f"""
+                <div style="
+                    border:1px solid rgba(128,128,128,.22);
+                    border-radius:12px;
+                    background:rgba(128,128,128,.03);
+                    padding:.8rem .95rem;
+                ">
+                    <div style="
+                        display:flex;
+                        align-items:center;
+                        gap:.65rem;
+                        margin-bottom:.7rem;
+                    ">
+                        <div style="
+                            width:30px;
+                            height:30px;
+                            border-radius:50%;
+                            background:rgba(25,118,210,.12);
+                            border:1px solid rgba(25,118,210,.28);
+                            display:flex;
+                            align-items:center;
+                            justify-content:center;
+                            font-weight:700;
+                            flex:0 0 auto;
+                        ">
+                            {html.escape(item["step"])}
+                        </div>
+                        <div style="font-weight:700; font-size:.98rem;">
+                            {html.escape(item["title"])}
+                        </div>
+                    </div>
 
-            with c1:
+                    <div style="
+                        display:grid;
+                        grid-template-columns:minmax(0,1fr) minmax(0,1.35fr) minmax(0,1fr);
+                        gap:1rem;
+                    ">
+                        <div>
+                            <div style="
+                                font-size:.72rem;
+                                opacity:.60;
+                                text-transform:uppercase;
+                                letter-spacing:.04em;
+                                margin-bottom:.2rem;
+                            ">
+                                Input
+                            </div>
+                            <div style="font-size:.88rem; line-height:1.4;">
+                                {html.escape(item["input"])}
+                            </div>
+                        </div>
+
+                        <div>
+                            <div style="
+                                font-size:.72rem;
+                                opacity:.60;
+                                text-transform:uppercase;
+                                letter-spacing:.04em;
+                                margin-bottom:.2rem;
+                            ">
+                                Processing
+                            </div>
+                            <div style="font-size:.88rem; line-height:1.4;">
+                                {html.escape(item["action"])}
+                            </div>
+                        </div>
+
+                        <div>
+                            <div style="
+                                font-size:.72rem;
+                                opacity:.60;
+                                text-transform:uppercase;
+                                letter-spacing:.04em;
+                                margin-bottom:.2rem;
+                            ">
+                                Output
+                            </div>
+                            <div style="
+                                font-size:.88rem;
+                                line-height:1.4;
+                                font-weight:600;
+                            ">
+                                {html.escape(item["output"])}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            if index < len(technical_flow) - 1:
                 st.markdown(
                     """
-                    **Inputs**
-
-                    `step`  
-                    `type`  
-                    `amount`  
-                    `oldbalanceOrg`  
-                    `newbalanceOrig`  
-                    `oldbalanceDest`  
-                    `newbalanceDest`
-                    """
+                    <div style="
+                        text-align:center;
+                        height:24px;
+                        line-height:24px;
+                        opacity:.45;
+                        font-size:1rem;
+                    ">
+                        ↓
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
                 )
 
-            with c2:
-                st.markdown(
-                    """
-                    **What happens**
+        with st.expander("What are the 12 model inputs?", expanded=False):
+            st.markdown(
+                """
+                **7 original PaySim fields**
 
-                    The system reads each stored transaction in PaySim `step` order.
+                `step`, `type`, `amount`, `oldbalanceOrg`, `newbalanceOrig`,
+                `oldbalanceDest`, `newbalanceDest`
 
-                    These fields describe:
-                    - **when** the transaction appears,
-                    - **what type** of transaction it is,
-                    - **how much money** moves,
-                    - and how the **sender and receiver balances** change.
-                    """
-                )
+                **+ 5 engineered features**
 
-            with c3:
-                st.markdown(
-                    """
-                    **Output**
+                `log_amount`, `origin_balance_error`, `destination_balance_error`,
+                `abs_origin_balance_error`, `abs_destination_balance_error`
 
-                    A transaction record ready for the ML pipeline.
-                    """
-                )
+                Together these form **12 model inputs: 11 numerical features + 1 categorical feature (`type`)**.
 
-        st.markdown("↓")
+                These inputs are processed by the ML pipeline to estimate **Fraud Risk (`fraud_score`)**.
+                For example, `fraud_score = 0.42` means an estimated **42% probability of fraud**.
 
-        # -----------------------------------------------------
-        # STEP 2
-        # -----------------------------------------------------
-        with st.container(border=True):
-            st.markdown("### 2 · Fraud risk is calculated")
-            st.caption("The fixed ML model converts transaction information into a fraud probability.")
-
-            c1, c2, c3 = st.columns([1.1, 1.6, 1.1])
-
-            with c1:
-                st.markdown(
-                    """
-                    **Inputs**
-
-                    Original transaction fields
-
-                    **+ engineered features**
-
-                    `log_amount`  
-                    `origin_balance_error`  
-                    `destination_balance_error`  
-                    `abs_origin_balance_error`  
-                    `abs_destination_balance_error`
-                    """
-                )
-
-            with c2:
-                st.markdown(
-                    """
-                    **What happens**
-
-                    Feature engineering creates additional variables from the original data.
-
-                    - `log_amount` compresses very large transaction values.
-                    - Balance-error features measure whether recorded sender/receiver balances
-                      behave as expected after the transaction.
-                    - Absolute balance-error features keep the **size** of that inconsistency,
-                      regardless of direction.
-
-                    The ML pipeline uses **12 inputs in total**:
-                    **11 numerical features + 1 categorical feature (`type`)**.
-
-                    The trained Logistic Regression model then produces `fraud_score`.
-                    """
-                )
-
-            with c3:
-                st.markdown(
-                    """
-                    **Output**
-
-                    **Fraud Risk**
-
-                    Example:
-
-                    `0.42 = 42% estimated probability of fraud`
-                    """
-                )
-
-        st.markdown("↓")
-
-        # -----------------------------------------------------
-        # STEP 3
-        # -----------------------------------------------------
-        with st.container(border=True):
-            st.markdown("### 3 · Alerts are created")
-            st.caption("Static and Adaptive use different rules to turn Fraud Risk into alerts.")
-
-            c1, c2, c3 = st.columns([1.1, 1.7, 1.1])
-
-            with c1:
-                st.markdown(
-                    f"""
-                    **Inputs**
-
-                    Fraud Risk
-
-                    Amount
-
-                    Investigation cost
-
-                    False-Negative Factor
-
-                    Static threshold:
-                    **{float(static_threshold):.2f}**
-
-                    Adaptive floor:
-                    **{float(risk_zone_floor):.2f}**
-                    """
-                )
-
-            with c2:
-                st.markdown(
-                    f"""
-                    **What happens**
-
-                    **Static**
-
-                    A transaction becomes an alert when:
-
-                    `Fraud Risk ≥ {float(static_threshold):.2f}`
-
-                    **Adaptive**
-
-                    A transaction must first satisfy:
-
-                    `Fraud Risk ≥ {float(risk_zone_floor):.2f}`
-
-                    **and**
-
-                    `Expected Benefit > 0`
-
-                    Eligible Adaptive alerts are then ordered by **Rank Score**.
-
-                    The **Budget Multiplier** determines how many of these ordered alerts may
-                    be retained within the Adaptive alert budget.
-
-                    The detailed Expected Benefit and Rank Score calculation is explained later
-                    in the Operational Step Explorer.
-                    """
-                )
-
-            with c3:
-                st.markdown(
-                    """
-                    **Output**
-
-                    Static or Adaptive alerts ready for the next decision stage
-                    """
-                )
-
-        st.markdown("↓")
-
-        # -----------------------------------------------------
-        # STEP 4
-        # -----------------------------------------------------
-        with st.container(border=True):
-            st.markdown("### 4 · Repeated alerts may be suppressed")
-            st.caption("Duplicate-like alerts can be filtered before analyst capacity is used.")
-
-            c1, c2, c3 = st.columns([1.1, 1.6, 1.1])
-
-            with c1:
-                st.markdown(
-                    """
-                    **Inputs**
-
-                    Alerts from the selected policy
-
-                    Simulation entity key
-
-                    Suppression window
-                    """
-                )
-
-            with c2:
-                st.markdown(
-                    """
-                    **What happens**
-
-                    The system checks whether a similar alert for the same simulated entity
-                    has already been accepted within the configured suppression window.
-
-                    If yes, the repeated alert can be marked as **suppressed**.
-
-                    This prevents analyst capacity from being consumed repeatedly by the same
-                    simulated case in a short period.
-                    """
-                )
-
-            with c3:
-                st.markdown(
-                    """
-                    **Output**
-
-                    Alerts remaining after repeat filtering
-                    """
-                )
-
-        st.markdown("↓")
-
-        # -----------------------------------------------------
-        # STEP 5
-        # -----------------------------------------------------
-        with st.container(border=True):
-            st.markdown("### 5 · Alerts are prioritised")
-            st.caption("Higher operational priority is considered first.")
-
-            c1, c2, c3 = st.columns([1.1, 1.6, 1.1])
-
-            with c1:
-                st.markdown(
-                    """
-                    **Inputs**
-
-                    Eligible alerts
-
-                    Rank Score
-                    """
-                )
-
-            with c2:
-                st.markdown(
-                    """
-                    **What happens**
-
-                    Alerts are sorted by **Rank Score from highest to lowest**.
-
-                    A higher Rank Score means the system estimates greater operational value
-                    from investigating that alert.
-
-                    There is **no fixed Rank Score threshold** such as `Rank Score ≥ 25`.
-
-                    Rank Score determines **order**. The alert budget determines **how many**
-                    ordered alerts may be kept.
-                    """
-                )
-
-            with c3:
-                st.markdown(
-                    """
-                    **Output**
-
-                    Prioritised alert queue
-                    """
-                )
-
-        st.markdown("↓")
-
-        # -----------------------------------------------------
-        # STEP 6
-        # -----------------------------------------------------
-        with st.container(border=True):
-            st.markdown("### 6 · Analyst capacity is applied")
-            st.caption("Only a limited number of alerts can enter investigation in each step.")
-
-            c1, c2, c3 = st.columns([1.1, 1.6, 1.1])
-
-            with c1:
-                st.markdown(
-                    f"""
-                    **Inputs**
-
-                    Prioritised alerts
-
-                    Per-step capacity:
-                    **{int(alert_budget_per_step)}**
-                    """
-                )
-
-            with c2:
-                st.markdown(
-                    f"""
-                    **What happens**
-
-                    The replay can investigate at most
-                    **{int(alert_budget_per_step)} alerts in each operational step**.
-
-                    Higher-priority alerts enter investigation first.
-
-                    Once capacity is full, the remaining prioritised alerts are marked as
-                    **capacity-rejected for that step**.
-
-                    Alert selection and analyst capacity are separate:
-                    the policy determines which transactions become alerts, while analyst
-                    capacity determines how many can actually be investigated.
-                    """
-                )
-
-            with c3:
-                st.markdown(
-                    """
-                    **Output**
-
-                    Investigated alerts
-
-                    Capacity-rejected alerts
-                    """
-                )
-
-        st.markdown("↓")
-
-        # -----------------------------------------------------
-        # STEP 7
-        # -----------------------------------------------------
-        with st.container(border=True):
-            st.markdown("### 7 · Outcomes are evaluated")
-            st.caption("Investigation decisions are compared retrospectively with PaySim fraud labels.")
-
-            c1, c2, c3 = st.columns([1.1, 1.6, 1.1])
-
-            with c1:
-                st.markdown(
-                    """
-                    **Inputs**
-
-                    Investigation decisions
-
-                    PaySim `isFraud`
-
-                    Transaction amount
-
-                    Investigation cost
-                    """
-                )
-
-            with c2:
-                st.markdown(
-                    """
-                    **What happens**
-
-                    The system compares investigated and non-investigated transactions with
-                    the retrospective PaySim fraud label.
-
-                    It then calculates:
-                    - frauds detected,
-                    - frauds missed,
-                    - precision,
-                    - recall,
-                    - investigation cost,
-                    - missed-fraud cost,
-                    - total estimated operational cost.
-                    """
-                )
-
-            with c3:
-                st.markdown(
-                    """
-                    **Output**
-
-                    Operational performance metrics used to compare Static and Adaptive
-                    """
-                )
+                Fraud Risk is a model prediction. It does **not** by itself mean that a transaction
+                becomes an alert or that an analyst investigates it.
+                """
+            )
 
         st.info(
-            "The key separation is: the ML layer converts transaction information into "
-            "Fraud Risk. The decision layer then turns that prediction into alerts, orders "
-            "them by operational priority, applies the alert budget, suppression and analyst "
-            "capacity, and finally evaluates what was actually investigated."
+            "ML layer: transaction data → Fraud Risk. "
+            "Decision layer: Fraud Risk → alerts → prioritisation → capacity → investigation outcome."
         )
 
     # --------------------------------------------------------
@@ -3031,59 +2828,92 @@ with workflow_tab:
                         expanded=False,
                     ):
                         st.markdown(
-                            f"""
-                            Once a transaction passes the Adaptive eligibility rules, the
-                            system still has to answer a practical question:
+                            """
+                            Once a transaction passes the Adaptive eligibility rules, the system
+                            must answer a practical question:
 
                             **Which eligible alert should be investigated first?**
 
-                            To answer that, the current `risk_zone` policy calculates an
-                            operational priority value called **Rank Score**. In this implementation,
-                            **Rank Score is exactly the Expected Benefit**.
+                            The current `risk_zone` policy uses a cost-aware value called
+                            **Rank Score**. In this implementation:
 
-                            The calculation is performed in three stages.
+                            **Rank Score = Expected Benefit**
 
-                            **A. Expected Fraud Loss**
-
-                            `Expected Fraud Loss = Fraud Risk × Amount × False-Negative Factor`
-
-                            Current False-Negative Factor:
-                            **{current_false_negative_factor:.1f}×**
-
-                            Because the current factor is
-                            **{current_false_negative_factor:.1f}×**, it scales the financial
-                            consequence assigned to potentially missing a fraud.
-
-                            **B. Expected Investigation Cost**
-
-                            `Expected Investigation Cost = (1 − Fraud Risk) × Investigation Cost`
-
-                            Current investigation-cost assumption:
-                            **€{float(investigation_cost):,.2f} per alert**
-
-                            The `(1 − Fraud Risk)` term represents the probability-weighted
-                            exposure to spending investigation effort on a transaction that is
-                            not fraudulent.
-
-                            **C. Expected Benefit / Rank Score**
-
-                            `Expected Benefit = Expected Fraud Loss − Expected Investigation Cost`
-
-                            and for the current `risk_zone` policy:
-
-                            `Rank Score = Expected Benefit`
-
-                            Therefore:
-
-                            `Rank Score =`
-                            `(Fraud Risk × Amount × False-Negative Factor)`
-                            `− ((1 − Fraud Risk) × Investigation Cost)`
-
-                            **Higher Rank Score = higher operational priority.**
+                            The calculation is easiest to understand as three separate stages.
                             """
                         )
 
-                        st.markdown("##### Numerical example")
+                        st.markdown("#### A · Cost of potentially missing the fraud")
+                        st.code(
+                            "Expected Fraud Loss = Fraud Risk × Amount × False-Negative Factor",
+                            language=None,
+                        )
+                        st.markdown(
+                            f"""
+                            **What this means**
+
+                            This estimates the financial exposure associated with *not*
+                            investigating a transaction that may actually be fraudulent.
+
+                            - **Fraud Risk** is the model-estimated probability of fraud.
+                            - **Amount** is the transaction value.
+                            - **False-Negative Factor** controls how strongly the system penalises
+                              the possibility of missing an actual fraud.
+
+                            Current False-Negative Factor: **{current_false_negative_factor:.1f}×**
+
+                            At **1.0×**, no additional weighting is applied beyond the transaction's
+                            risk-weighted value. A higher factor would make the cost of missing fraud
+                            count more heavily in operational priority.
+                            """
+                        )
+
+                        st.markdown("#### B · Cost of potentially investigating a non-fraud")
+                        st.code(
+                            "Expected Investigation Cost = (1 − Fraud Risk) × Investigation Cost",
+                            language=None,
+                        )
+                        st.markdown(
+                            f"""
+                            **What this means**
+
+                            The configured investigation-cost assumption is
+                            **€{float(investigation_cost):,.2f} per alert**.
+
+                            The term `(1 − Fraud Risk)` represents the estimated probability that
+                            the transaction is **not fraudulent**. Multiplying the configured review
+                            cost by this probability gives the **probability-weighted investigation
+                            cost used inside the ranking calculation**.
+
+                            It does **not** mean that the configured review cost changes. The
+                            underlying assumption remains **€{float(investigation_cost):,.2f} per
+                            investigation**.
+                            """
+                        )
+
+                        st.markdown("#### C · Operational value of investigating the alert")
+                        st.code(
+                            "Expected Benefit = Expected Fraud Loss − Expected Investigation Cost",
+                            language=None,
+                        )
+                        st.code("Rank Score = Expected Benefit", language=None)
+                        st.markdown(
+                            """
+                            **What this means**
+
+                            The system compares the expected consequence of potentially missing
+                            fraud with the probability-weighted cost of investigating a likely
+                            non-fraud.
+
+                            A **higher Rank Score** means that, under the current assumptions,
+                            investigating that alert has greater expected operational value.
+
+                            Rank Score is used to **order eligible Adaptive alerts from highest to
+                            lowest priority**. It does not change the model's Fraud Risk.
+                            """
+                        )
+
+                        st.markdown("#### Numerical example")
 
                         example_risk = 0.40
                         example_amount = 10000.0
@@ -3096,31 +2926,39 @@ with workflow_tab:
                             (1.0 - example_risk)
                             * float(investigation_cost)
                         )
-                        example_benefit = (
-                            example_loss - example_review_cost
-                        )
+                        example_benefit = example_loss - example_review_cost
 
-                        ex1, ex2, ex3 = st.columns(3)
-                        with ex1:
+                        e1, e2, e3 = st.columns(3)
+                        with e1:
                             st.metric(
                                 "Expected Fraud Loss",
                                 f"€{example_loss:,.2f}",
                             )
-                        with ex2:
+                        with e2:
                             st.metric(
                                 "Expected Investigation Cost",
                                 f"€{example_review_cost:,.2f}",
                             )
-                        with ex3:
+                        with e3:
                             st.metric(
-                                "Rank Score / Expected Benefit",
+                                "Rank Score",
                                 f"{example_benefit:,.2f}",
                             )
 
                         st.caption(
-                            f"Example: 40% Fraud Risk, €10,000 amount, "
-                            f"{current_false_negative_factor:.1f}× False-Negative Factor "
-                            f"and €{float(investigation_cost):,.2f} investigation cost."
+                            f"Example: 40% Fraud Risk × €10,000 × "
+                            f"{current_false_negative_factor:.1f}× = €{example_loss:,.2f} "
+                            f"Expected Fraud Loss. The probability-weighted investigation cost "
+                            f"is (1 − 0.40) × €{float(investigation_cost):,.2f} = "
+                            f"€{example_review_cost:,.2f}. Therefore Rank Score = "
+                            f"€{example_loss:,.2f} − €{example_review_cost:,.2f} = "
+                            f"{example_benefit:,.2f}."
+                        )
+
+                        st.info(
+                            "False-Negative Factor and Investigation Cost participate in the "
+                            "Rank Score calculation. The Budget Multiplier does not. It is applied "
+                            "afterwards to control how many ranked Adaptive alerts may be retained."
                         )
 
                     with st.expander(
