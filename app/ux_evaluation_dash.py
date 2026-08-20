@@ -1933,8 +1933,10 @@ with workflow_tab:
         """,
         unsafe_allow_html=True,
     )
-
-    with st.expander("How does information move through the 7 steps?", expanded=False):
+    with st.expander(
+        "How does information move through the 7 steps?",
+        expanded=False,
+    ):
         st.caption(
             "A compact technical map of the same seven stages. "
             "Open the model-input note only if you want the feature-level detail."
@@ -1959,14 +1961,19 @@ with workflow_tab:
                 "step": "3",
                 "title": "Alert selection",
                 "input": "Fraud Risk + decision parameters",
-                "action": "Static or Adaptive rules determine which transactions become candidate alerts.",
+                "action": (
+                    "Static or Adaptive rules determine which transactions "
+                    "become candidate alerts."
+                ),
                 "output": "Candidate alerts",
             },
             {
                 "step": "4",
                 "title": "Suppression",
                 "input": "Candidate alerts + simulated entity history",
-                "action": "Repeated alerts may be filtered within the suppression window.",
+                "action": (
+                    "Repeated alerts may be filtered within the suppression window."
+                ),
                 "output": "Eligible alerts",
             },
             {
@@ -1981,8 +1988,8 @@ with workflow_tab:
                 "title": "Analyst capacity",
                 "input": "Prioritised alerts + per-step capacity",
                 "action": (
-                    f"At most {int(alert_budget_per_step):,} alerts per operational step "
-                    "enter investigation."
+                    f"At most {int(alert_budget_per_step):,} alerts per operational "
+                    "step enter investigation."
                 ),
                 "output": "Investigated / capacity-rejected alerts",
             },
@@ -1990,121 +1997,84 @@ with workflow_tab:
                 "step": "7",
                 "title": "Outcomes",
                 "input": "Investigation decisions + isFraud",
-                "action": "Decisions are compared retrospectively with known fraud labels.",
+                "action": (
+                    "Decisions are compared retrospectively with known fraud labels."
+                ),
                 "output": "Detection, precision, recall and cost metrics",
             },
         ]
 
         for index, item in enumerate(technical_flow):
+            # IMPORTANT: build the HTML without Markdown-leading indentation.
+            # Otherwise Streamlit can interpret the HTML as a Markdown code block
+            # and show the raw <div> tags on screen.
+            card_html = (
+                '<div style="'
+                'border:1px solid rgba(255,255,255,.12);'
+                'border-radius:12px;'
+                'background:rgba(255,255,255,.018);'
+                'padding:.85rem 1rem;'
+                '">'
+                '<div style="display:flex;align-items:center;gap:.65rem;margin-bottom:.72rem;">'
+                '<div style="'
+                'width:30px;height:30px;border-radius:50%;'
+                'background:rgba(25,118,210,.13);'
+                'border:1px solid rgba(25,118,210,.35);'
+                'display:flex;align-items:center;justify-content:center;'
+                'font-weight:700;flex:0 0 auto;'
+                '">'
+                f'{html.escape(item["step"])}'
+                '</div>'
+                '<div style="font-weight:700;font-size:1rem;">'
+                f'{html.escape(item["title"])}'
+                '</div>'
+                '</div>'
+                '<div style="'
+                'display:grid;'
+                'grid-template-columns:minmax(0,1fr) minmax(0,1.35fr) minmax(0,1fr);'
+                'gap:1rem;'
+                '">'
+                '<div>'
+                '<div style="font-size:.72rem;opacity:.60;text-transform:uppercase;'
+                'letter-spacing:.04em;margin-bottom:.2rem;">Input</div>'
+                '<div style="font-size:.88rem;line-height:1.4;">'
+                f'{html.escape(item["input"])}'
+                '</div>'
+                '</div>'
+                '<div>'
+                '<div style="font-size:.72rem;opacity:.60;text-transform:uppercase;'
+                'letter-spacing:.04em;margin-bottom:.2rem;">Processing</div>'
+                '<div style="font-size:.88rem;line-height:1.4;">'
+                f'{html.escape(item["action"])}'
+                '</div>'
+                '</div>'
+                '<div>'
+                '<div style="font-size:.72rem;opacity:.60;text-transform:uppercase;'
+                'letter-spacing:.04em;margin-bottom:.2rem;">Output</div>'
+                '<div style="font-size:.88rem;line-height:1.4;font-weight:600;">'
+                f'{html.escape(item["output"])}'
+                '</div>'
+                '</div>'
+                '</div>'
+                '</div>'
+            )
+
             st.markdown(
-                f"""
-                <div style="
-                    border:1px solid rgba(128,128,128,.22);
-                    border-radius:12px;
-                    background:rgba(128,128,128,.03);
-                    padding:.8rem .95rem;
-                ">
-                    <div style="
-                        display:flex;
-                        align-items:center;
-                        gap:.65rem;
-                        margin-bottom:.7rem;
-                    ">
-                        <div style="
-                            width:30px;
-                            height:30px;
-                            border-radius:50%;
-                            background:rgba(25,118,210,.12);
-                            border:1px solid rgba(25,118,210,.28);
-                            display:flex;
-                            align-items:center;
-                            justify-content:center;
-                            font-weight:700;
-                            flex:0 0 auto;
-                        ">
-                            {html.escape(item["step"])}
-                        </div>
-                        <div style="font-weight:700; font-size:.98rem;">
-                            {html.escape(item["title"])}
-                        </div>
-                    </div>
-
-                    <div style="
-                        display:grid;
-                        grid-template-columns:minmax(0,1fr) minmax(0,1.35fr) minmax(0,1fr);
-                        gap:1rem;
-                    ">
-                        <div>
-                            <div style="
-                                font-size:.72rem;
-                                opacity:.60;
-                                text-transform:uppercase;
-                                letter-spacing:.04em;
-                                margin-bottom:.2rem;
-                            ">
-                                Input
-                            </div>
-                            <div style="font-size:.88rem; line-height:1.4;">
-                                {html.escape(item["input"])}
-                            </div>
-                        </div>
-
-                        <div>
-                            <div style="
-                                font-size:.72rem;
-                                opacity:.60;
-                                text-transform:uppercase;
-                                letter-spacing:.04em;
-                                margin-bottom:.2rem;
-                            ">
-                                Processing
-                            </div>
-                            <div style="font-size:.88rem; line-height:1.4;">
-                                {html.escape(item["action"])}
-                            </div>
-                        </div>
-
-                        <div>
-                            <div style="
-                                font-size:.72rem;
-                                opacity:.60;
-                                text-transform:uppercase;
-                                letter-spacing:.04em;
-                                margin-bottom:.2rem;
-                            ">
-                                Output
-                            </div>
-                            <div style="
-                                font-size:.88rem;
-                                line-height:1.4;
-                                font-weight:600;
-                            ">
-                                {html.escape(item["output"])}
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                """,
+                card_html,
                 unsafe_allow_html=True,
             )
 
             if index < len(technical_flow) - 1:
                 st.markdown(
-                    """
-                    <div style="
-                        text-align:center;
-                        height:24px;
-                        line-height:24px;
-                        opacity:.45;
-                        font-size:1rem;
-                    ">
-                        ↓
-                    </div>
-                    """,
+                    '<div style="text-align:center;height:22px;line-height:22px;'
+                    'opacity:.40;font-size:.95rem;">↓</div>',
                     unsafe_allow_html=True,
                 )
 
-        with st.expander("What are the 12 model inputs?", expanded=False):
+        with st.expander(
+            "What are the 12 model inputs?",
+            expanded=False,
+        ):
             st.markdown(
                 """
                 **7 original PaySim fields**
@@ -2114,23 +2084,26 @@ with workflow_tab:
 
                 **+ 5 engineered features**
 
-                `log_amount`, `origin_balance_error`, `destination_balance_error`,
-                `abs_origin_balance_error`, `abs_destination_balance_error`
+                `log_amount`, `origin_balance_error`,
+                `destination_balance_error`,
+                `abs_origin_balance_error`,
+                `abs_destination_balance_error`
 
-                Together these form **12 model inputs: 11 numerical features + 1 categorical feature (`type`)**.
+                Together these form **12 model inputs: 11 numerical features
+                + 1 categorical feature (`type`)**.
 
-                These inputs are processed by the ML pipeline to estimate **Fraud Risk (`fraud_score`)**.
-                For example, `fraud_score = 0.42` means an estimated **42% probability of fraud**.
+                These inputs are processed by the ML pipeline to estimate
+                **Fraud Risk (`fraud_score`)**.
 
-                Fraud Risk is a model prediction. It does **not** by itself mean that a transaction
-                becomes an alert or that an analyst investigates it.
+                For example, `fraud_score = 0.42` means an estimated
+                **42% probability of fraud**.
+
+                Fraud Risk is a model prediction. It does **not** by itself
+                mean that a transaction becomes an alert or that an analyst
+                investigates it.
                 """
             )
 
-        st.info(
-            "ML layer: transaction data → Fraud Risk. "
-            "Decision layer: Fraud Risk → alerts → prioritisation → capacity → investigation outcome."
-        )
 
     # --------------------------------------------------------
     # 2. OPERATIONAL STEP EXPLORER
