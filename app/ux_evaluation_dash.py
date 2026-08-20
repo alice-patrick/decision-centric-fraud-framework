@@ -674,8 +674,8 @@ st.sidebar.markdown(
     **Suggested reading order**
 
     1. Executive Summary  
-    2. Analyst Capacity  
-    3. Sequential Workflow  
+    2. Sequential Workflow  
+    3. Analyst Capacity  
     4. Monitoring  
     5. Sensitivity Analysis
     """
@@ -764,15 +764,15 @@ adaptive_windows = normalise_windows(
 
 (
     executive_tab,
-    capacity_tab,
     workflow_tab,
+    capacity_tab,
     monitoring_tab,
     sensitivity_tab,
 ) = st.tabs(
     [
         "1. Executive Summary",
-        "2. Analyst Capacity",
-        "3. Sequential Workflow",
+        "2. Sequential Workflow",
+        "3. Analyst Capacity",
         "4. Monitoring",
         "5. Sensitivity Analysis",
     ]
@@ -802,8 +802,8 @@ with executive_tab:
         **Quick guide**
 
         Start with the **Executive Summary** for the main Static vs Adaptive result.  
-        Use **Analyst Capacity** to see which alerts enter the investigation queue and why.  
-        Open **Sequential Workflow** to understand how transactions are processed over time.  
+        Open **Sequential Workflow** to understand how transactions move through the decision process over time.  
+        Use **Analyst Capacity** to see which prioritised alerts actually enter the investigation queue and why.  
         Use **Monitoring** to inspect changes across the replay, and **Sensitivity Analysis** to test how different operating assumptions affect the results.
 
         **Tip:** When comparing scenarios, change one setting at a time so that the effect of each operational assumption remains clear.
