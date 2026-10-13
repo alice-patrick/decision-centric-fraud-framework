@@ -4207,7 +4207,6 @@ with monitoring_tab:
                 st.pyplot(
                     fig,
                     width="stretch",
-                    transparent=False,
                 )
                 plt.close(fig)
 
