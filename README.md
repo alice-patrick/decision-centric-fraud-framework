@@ -2,7 +2,7 @@
 
 **MSc Artificial Intelligence Dissertation | Python · Machine Learning · FastAPI · Streamlit**
 
-An end-to-end research prototype that turns fraud-risk predictions into **prioritised investigation decisions** under limited analyst capacity. Rather than evaluating classification accuracy alone, it compares **Static and Adaptive alert-selection policies** using fraud detection, analyst workload and simulated operational cost.
+An end-to-end research prototype that turns fraud-risk predictions into **prioritised investigation decisions** under limited analyst capacity. It compares **Static and Adaptive alert-selection policies** using fraud detection, analyst workload and simulated operational cost.
 
 > **Research scope:** Synthetic PaySim transactions, offline chronological replay and simulation-based cost estimates. This is not a live banking or production fraud-monitoring system. The hosted demo is currently offline; screenshots and local run instructions are provided below.
 
@@ -11,93 +11,105 @@ An end-to-end research prototype that turns fraud-risk predictions into **priori
 | Evaluation | Static | Adaptive |
 | --- | ---: | ---: |
 | Investigated alerts | 313 | 349 |
-| Frauds detected | 27 | 30 |
-| Frauds missed | 41 | 38 |
+| Frauds detected | 27 | **30** |
+| Frauds missed | 41 | **38** |
+| Precision | 8.6% | 8.6% |
 | Recall | 39.7% | **44.1%** |
 | Estimated operational cost | €1,745,391.01 | **€1,726,843.29** |
 
-**Baseline:** 10,000 transactions, 50 investigations per operational step, Static threshold 0.50, Adaptive minimum risk threshold 0.30. In this scenario, Adaptive detected **3 additional frauds** and reduced *estimated* operational cost by **€18,547.72**. These are simulation results, not realised bank savings.
+**Baseline configuration:** 10,000 transactions; 50 investigations per operational step; €10 assumed cost per investigation; Static threshold 0.50; Adaptive minimum risk threshold 0.30; Adaptive budget multiplier 1.40; repeat-alert suppression window of 3 operational steps.
 
-![Executive summary dashboard](images/01_executive_summary.png)
+In this scenario, Adaptive detected **3 additional frauds**, increased recall by **4.4 percentage points** and reduced estimated operational cost by **€18,547.72**, while investigating **36 additional alerts**. These are simulation results, not realised bank savings.
 
 ## Dashboard walkthrough
 
-The Streamlit interface has five views, covering policy performance, sequential decisions, analyst workload, monitoring and parameter sensitivity.
+The Streamlit dashboard has five views, presented below in the same order as the interface.
 
-### 1. Sequential workflow
+### 1. Executive Summary
 
-Transactions are replayed chronologically, with repeat-alert suppression and analyst-capacity limits applied within each operational step.
+The Executive Summary compares Static and Adaptive outcomes under the selected operating configuration, including fraud coverage, investigation workload and estimated operational cost.
 
-![Sequential workflow](images/02_sequential_workflow.png)
+![Executive Summary dashboard](images/01_executive_summary.png)
 
-### 2. Analyst capacity and investigation decisions
+#### Estimated cost impact
 
-The dashboard separates **investigated**, **suppressed** and **capacity-rejected** alerts, making operational trade-offs visible. For the Adaptive baseline, 349 alerts were investigated, 21 suppressed and 650 rejected due to capacity limits.
+The cost-impact section explains the financial comparison within the Executive Summary.
 
-![Analyst capacity overview](images/03_analyst_capacity.png)
+**Estimated operational cost = investigation cost + estimated value of missed fraud.**
 
-<details>
-<summary>Additional analyst-capacity detail</summary>
+Investigation cost is the number of investigated alerts multiplied by the assumed review cost. The estimated value of missed fraud is the sum of the transaction amounts of missed fraud cases, used as a proxy for potential direct loss.
 
-![Analyst capacity detail](images/03.1_analyst_capacity.png)
-
-</details>
-
-### 3. Monitoring
-
-Ten consecutive reporting windows show changes in workload, missed fraud and estimated cost during the offline replay. These reporting windows are distinct from operational steps.
-
-![Monitoring dashboard](images/04_monitoring.png)
-
-### 4. Sensitivity analysis
-
-Seven operating parameters were examined one at a time. Across **45 tested settings**, Adaptive was preferred in **28**, Static in **11**, with **6 equivalent results**. This illustrates that policy performance depends on the operating conditions rather than one strategy always winning.
-
-![Sensitivity analysis](images/05_sensitivity_analysis.png)
-
-<details>
-<summary>Additional sensitivity-analysis results</summary>
-
-![Sensitivity-analysis detail](images/05.1_sensitivity_analysis.png)
-
-</details>
-
-### 5. Estimated cost impact
-
-Estimated operational cost combines assumed investigation costs and the transaction amounts of missed fraud cases as a proxy for potential loss. It is intended for **comparative simulation**, not as an estimate of observed banking losses.
-
-<details>
-<summary>View cost calculation and comparison</summary>
+These figures support **comparative simulation** and do not represent observed banking losses.
 
 ![Estimated cost impact](images/01.1_cost_impact.png)
 
-</details>
+### 2. Sequential Workflow
+
+Transactions are replayed chronologically. Candidate alerts pass through repeat-alert suppression, prioritisation and the analyst-capacity limit before entering the simulated investigation queue.
+
+The view presents the seven-step process from transaction arrival to retrospective evaluation against known fraud labels.
+
+![Sequential Workflow](images/02_sequential_workflow.png)
+
+### 3. Analyst Capacity
+
+This view separates three outcomes:
+
+- **Investigated:** alerts selected for simulated investigation.
+- **Suppressed:** repeat alerts filtered within the suppression window.
+- **Capacity-rejected:** eligible alerts excluded because the operational step's investigation limit was reached.
+
+| Alert outcome | Static | Adaptive |
+| --- | ---: | ---: |
+| Investigated | 313 | 349 |
+| Suppressed | 13 | 21 |
+| Capacity-rejected | 410 | 650 |
+
+#### Static policy
+
+![Analyst Capacity — Static](images/03_analyst_capacity%28static%29-%20Copy.png)
+
+#### Adaptive policy
+
+![Analyst Capacity — Adaptive](images/03.1_analyst_capacity%28adaptive%29.png)
+
+An investigated alert is not automatically a confirmed fraud. In the baseline, 27 of the 313 Static investigations and 30 of the 349 Adaptive investigations corresponded to fraud in the retrospective evaluation labels.
+
+### 4. Monitoring
+
+The replay is divided into **10 consecutive reporting windows of 1,000 transactions**. These show changes in candidate alerts, investigations, missed fraud, recall and estimated operational cost.
+
+Reporting windows are distinct from **operational steps**, where analyst capacity is applied and reset.
+
+![Monitoring dashboard](images/04_monitoring.png)
+
+### 5. Sensitivity Analysis
+
+Seven operating parameters are examined one at a time: transaction volume, analyst capacity, investigation cost, suppression window, Adaptive budget multiplier, Static threshold and minimum Adaptive threshold.
+
+Each experiment changes one parameter while holding the others fixed.
+
+![Sensitivity Analysis experiments](images/05_sensitivity_analysis.png)
+
+#### Sensitivity-analysis results
+
+Across **45 reported comparisons**, Adaptive was preferred in **28**, Static in **11**, with **6 equivalent results**.
+
+Preference is based on higher recall, or lower estimated cost when recall is tied. Policy performance therefore depends on the operating configuration.
+
+![Sensitivity Analysis baseline and results](images/05.1_sensitivity_analysis%28KPIS%29.png)
 
 ## How the system works
 
-```text
-PaySim transactions
-    ↓
-Feature engineering & preprocessing
-    ↓
-Logistic Regression + probability calibration
-    ↓
-Fraud-risk scores
-    ↓
-Static threshold / Adaptive cost-aware ranking
-    ↓
-Repeat-alert suppression
-    ↓
-Per-step analyst-capacity constraint
-    ↓
-Investigation queue and operational evaluation
-```
+1. **Transaction replay:** PaySim transactions are processed in chronological step order.
+2. **Fraud-risk scoring:** Feature engineering and preprocessing feed a Logistic Regression model with probability calibration.
+3. **Alert selection:** Static threshold rules or Adaptive eligibility rules identify candidate alerts.
+4. **Repeat-alert suppression:** Repeated alerts are filtered within the configured suppression window.
+5. **Prioritisation:** Eligible alerts are ordered using the selected policy; Adaptive uses cost-aware expected-benefit ranking.
+6. **Analyst capacity:** The per-step investigation limit determines which alerts enter the queue and which are capacity-rejected.
+7. **Evaluation:** Investigation decisions are compared retrospectively with fraud labels to calculate precision, recall, missed fraud, workload and estimated cost.
 
-- **ML pipeline:** scikit-learn `ColumnTransformer`, scaling, one-hot encoding, Logistic Regression and probability calibration.
-- **Decision layer:** Static risk threshold versus Adaptive eligibility, expected-benefit ranking and alert budget.
-- **Operational replay:** Chronological PaySim steps, repeat-alert suppression and capacity-constrained investigations.
-- **Evaluation:** Precision, recall, missed fraud, workload, estimated cost and sensitivity analysis.
-- **Interface/API:** Streamlit dashboard with a separate FastAPI backend.
+The ML pipeline uses scikit-learn `ColumnTransformer`, scaling, one-hot encoding, Logistic Regression and probability calibration. A **FastAPI backend** serves the decision and evaluation functionality to the **Streamlit dashboard**.
 
 ## Technology stack
 
@@ -127,11 +139,11 @@ In a **second terminal**, activate `.venv` again and start the UX dashboard:
 python -m streamlit run app/ux_evaluation_dash.py
 ```
 
-Open `http://localhost:8501`. API documentation is available at `http://127.0.0.1:8002/docs` while the backend is running.
+Open [http://localhost:8501](http://localhost:8501). API documentation is available at [http://127.0.0.1:8002/docs](http://127.0.0.1:8002/docs) while the backend is running.
 
 ## Testing and limitations
 
-The project README previously documented **88 passing automated tests** covering decision logic, analyst capacity, sequential simulation, API behaviour and dashboard calculations. Re-run the test suite in your local environment to verify the current revision:
+Earlier project documentation reported **88 passing automated tests** covering decision logic, analyst capacity, sequential simulation, API behaviour and dashboard calculations. Verify the current revision in your local environment:
 
 ```cmd
 python -m pytest
@@ -141,4 +153,4 @@ python -m pytest
 
 ## Main contribution
 
-The key contribution is the **decision layer between ML predictions and investigation actions**: it makes alert eligibility, prioritisation, workload constraints and trade-offs inspectable, instead of treating the classifier score as the final operational decision.
+The key contribution is the **decision layer between ML predictions and investigation actions**. It makes alert eligibility, prioritisation, workload constraints and operational trade-offs inspectable, rather than treating the classifier score as the final investigation decision.
