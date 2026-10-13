@@ -1,714 +1,676 @@
 # Decision-Centric Fraud Detection Framework
 
-A research prototype for evaluating how machine-learning fraud scores can support operational fraud-investigation decisions under limited analyst capacity.
+**MSc Dissertation — Fraud Detection Decision Support under Limited Analyst Capacity**
 
-The system combines fraud-risk estimation with configurable alert-selection policies, transaction prioritisation, repeat-alert suppression, analyst-capacity constraints, sequential evaluation, monitoring, and sensitivity analysis.
+A research prototype that converts machine-learning fraud probabilities into **prioritised investigation decisions** under limited analyst capacity.
 
-## Live Demo
+[Live Streamlit Demo](https://decision-centric-fraud-framework-enwdwnh3oqxemezgpte6ug.streamlit.app/)
 
-[Open the deployed Streamlit dashboard](https://decision-centric-fraud-framework-enwdwnh3oqxemezgpte6ug.streamlit.app/)
-
-The deployed interface is provided as a research demonstration. It does not process live banking transactions and should not be interpreted as a production fraud-monitoring system.
+> **Scope:** Synthetic PaySim data · offline chronological replay · simulation-based operational costs · not a production or live banking system.
 
 ---
 
-## Project Scope
+## 1. System Architecture
 
-Conventional fraud-detection systems often focus on predictive performance alone. In practice, however, investigation resources are limited and not every suspicious transaction can be reviewed.
+```text
+PaySim Transactions
+        ↓
+Feature Engineering
+        ↓
+Logistic Regression + Probability Calibration
+        ↓
+Fraud Risk (`fraud_score`)
+        ↓
+Static / Adaptive Alert Selection
+        ↓
+Repeat-Alert Suppression
+        ↓
+Rank Score Prioritisation
+        ↓
+Analyst Capacity per Operational Step
+        ↓
+Investigated / Suppressed / Capacity-Rejected
+        ↓
+Recall · Precision · Operational Cost
+```
 
-This project focuses on the operational decision that follows model scoring:
-
-> **Which transactions should be investigated when available analyst capacity is constrained?**
-
-The framework separates fraud prediction from fraud-response decision making.
-
-The machine-learning model produces a fraud-risk score, while the decision layer determines:
-
-- which transactions become candidate alerts;
-- how alerts are prioritised;
-- which repeated alerts are suppressed;
-- which alerts can enter the analyst investigation queue;
-- and how these decisions affect fraud detection and estimated operational cost.
-
-The project compares two alert-selection approaches:
-
-- **Static policy:** candidate alerts are generated using a fixed fraud-risk threshold.
-- **Adaptive policy:** candidate eligibility, cost-aware ranking, and a configurable alert budget are combined to broaden or restrict the candidate pool relative to the Static baseline.
-
-The main operational conclusions are based on **sequential chronological replay** rather than unrestricted batch evaluation.
-
----
-
-## Dataset
-
-The experiments use the **PaySim synthetic mobile-money dataset**.
-
-**Dataset source:**  
-[PaySim on Kaggle](https://www.kaggle.com/datasets/ealaxi/paysim1/data)
-
-The implementation uses the following transaction variables:
-
-| Variable | Description |
+| Layer | Role |
 | --- | --- |
-| `step` | Chronological PaySim step |
+| **ML Layer** | Estimates transaction-level Fraud Risk |
+| **Decision Layer** | Converts Fraud Risk into alerts and operational priority |
+| **Sequential Simulation** | Applies suppression and analyst capacity chronologically |
+| **Evaluation Layer** | Measures fraud detection and estimated operational cost |
+| **Dashboard** | Exposes results, queues, explanations and experiments |
+
+---
+
+## 2. Dataset and Feature Representation
+
+The project uses the **PaySim synthetic mobile-money dataset**.
+
+### Original PaySim Columns
+
+| Column | Representation |
+| --- | --- |
+| `step` | Chronological PaySim period |
 | `type` | Transaction type |
-| `amount` | Transaction amount |
+| `amount` | Transaction value |
 | `oldbalanceOrg` | Origin balance before the transaction |
 | `newbalanceOrig` | Origin balance after the transaction |
 | `oldbalanceDest` | Destination balance before the transaction |
 | `newbalanceDest` | Destination balance after the transaction |
-| `isFraud` | Ground-truth fraud label used for retrospective evaluation |
+| `isFraud` | Ground-truth target used for training and retrospective evaluation |
 
-The identifiers displayed in the application are synthetic simulation identifiers. The system does not use real customer, card, account, or UPI identifiers.
+### Engineered Features
 
-The dataset is not included in the repository and is expected locally at:
-
-```text
-data/raw/AIML Dataset.csv
-```
-
----
-
-## Feature Engineering
-
-The modelling pipeline includes the following engineered variables:
-
-- `log_amount`
-- `origin_balance_error`
-- `destination_balance_error`
-- `abs_origin_balance_error`
-- `abs_destination_balance_error`
-
-The dataset is split chronologically into training, validation, and test partitions to reduce temporal leakage.
-
----
-
-## Machine-Learning Model
-
-The fraud-scoring layer uses **Logistic Regression** within a scikit-learn preprocessing pipeline.
-
-The preprocessing design includes:
-
-- `StandardScaler` for numerical variables;
-- `OneHotEncoder` for categorical variables;
-- `ColumnTransformer` to combine preprocessing steps.
-
-The model produces transaction-level fraud probabilities that are used by the downstream decision layer.
-
-Probability calibration is part of the modelling workflow and is performed using validation-based **Platt scaling**.
-
-The model is loaded from a persisted model artifact through the project configuration and model registry.
-
----
-
-# Decision Layer
-
-## Static Policy
-
-The Static policy uses a fixed fraud-risk threshold.
-
-Under the example dashboard configuration:
-
-```text
-Static threshold = 0.50
-```
-
-A transaction becomes a Static candidate alert when:
-
-```text
-Fraud risk ≥ 0.50
-```
-
-The threshold remains fixed throughout the evaluation.
-
-Therefore, the number of Static alerts is determined by the fraud-score distribution of the evaluated transactions rather than by a predefined alert percentage.
-
----
-
-## Adaptive Policy
-
-The Adaptive policy separates three concepts that should not be confused:
-
-1. **Static baseline alert volume**
-2. **Adaptive Budget Multiplier**
-3. **Minimum Adaptive risk floor**
-
-### 1. Static baseline
-
-The Static policy first establishes the baseline number of candidate alerts.
-
-For example, under the current 10,000-transaction configuration:
-
-```text
-Static threshold = 0.50
-        ↓
-736 Static candidate alerts
-```
-
-### 2. Adaptive Budget Multiplier
-
-The Budget Multiplier determines the maximum size of the Adaptive candidate-alert budget relative to the Static baseline.
-
-For example:
-
-```text
-Static candidate alerts = 736
-Budget Multiplier = 1.4×
-
-736 × 1.4 = 1,030.4
-
-Adaptive candidate budget = 1,030
-```
-
-Therefore:
-
-```text
-0.50 Static threshold
-        ↓
-736 Static alerts
-        ↓
-× 1.4 Budget Multiplier
-        ↓
-1,030 Adaptive candidate slots
-```
-
-The multiplier is applied to the **number of candidate alerts generated by the Static baseline**.
-
-It is **not** applied to the Adaptive minimum risk threshold.
-
----
-
-## Adaptive Eligibility and Selection
-
-Once the Adaptive candidate budget has been established, the system determines which transactions are eligible to fill those candidate slots.
-
-Under the current `risk_zone` configuration, the process can be represented as:
-
-```text
-Fraud risk ≥ 0.30
-        ↓
-Positive expected operational benefit
-        ↓
-Operational Rank Score
-        ↓
-Eligible transactions are ranked
-        ↓
-Highest-ranked transactions are selected
-        ↓
-Selection continues up to the Adaptive candidate budget
-```
-
-The **0.30 minimum risk floor** therefore determines eligibility.
-
-The **1.4× Budget Multiplier** determines the maximum candidate budget.
-
-These settings answer two different questions:
-
-| Setting | Question |
+| Feature | Representation |
 | --- | --- |
-| **Minimum risk floor (0.30)** | Which transactions are eligible to compete for Adaptive candidate slots? |
-| **Budget Multiplier (1.4×)** | How many candidate slots may the Adaptive policy use? |
+| `log_amount` | Log-scaled transaction amount |
+| `origin_balance_error` | Origin-side balance inconsistency |
+| `destination_balance_error` | Destination-side balance inconsistency |
+| `abs_origin_balance_error` | Absolute origin-side inconsistency |
+| `abs_destination_balance_error` | Absolute destination-side inconsistency |
 
-For example, a transaction with:
-
-```text
-Fraud risk = 0.43
-```
-
-would not satisfy the Static rule:
+### Model Input Representation
 
 ```text
-0.43 < 0.50
+7 original transaction fields
++
+5 engineered features
+=
+12 model inputs
 ```
 
-but it can remain eligible under Adaptive because:
+The model inputs consist of:
 
 ```text
-0.43 ≥ 0.30
+11 numerical features
++
+1 categorical feature (`type`)
 ```
 
-provided that it also satisfies the remaining Adaptive decision criteria and ranks highly enough to enter the available candidate budget.
-
-Neither the minimum risk floor nor the Budget Multiplier changes the underlying machine-learning model.
+> `isFraud` is the target/evaluation label. It is **not supplied to the model as a predictive input**.
 
 ---
 
-## Fraud Risk and Rank Score
+## 3. Machine-Learning Pipeline
 
-Fraud risk and Rank Score represent different quantities.
+```text
+Original Transaction Fields
+        ↓
+Engineered Features
+        ↓
+ColumnTransformer
+   ├── StandardScaler → Numerical Features
+   └── OneHotEncoder  → Transaction Type
+        ↓
+Logistic Regression
+        ↓
+Probability Calibration
+        ↓
+Fraud Risk (`fraud_score`)
+```
+
+The dataset is divided chronologically into:
+
+```text
+Training
+→ Validation
+→ Test
+```
 
 ### Fraud Risk
 
-**Fraud risk** is the probability produced by the machine-learning model.
+`fraud_score` represents the model-estimated probability of fraud.
 
 Example:
 
 ```text
-Fraud risk = 0.72
+fraud_score = 0.42
+→ estimated Fraud Risk = 42%
 ```
 
-means that the model assigned a fraud probability of approximately 72%.
-
-### Rank Score
-
-**Rank Score** is an operational priority value used to order eligible candidate alerts.
-
-Under the current `risk_zone` configuration, ranking incorporates fraud risk together with operational and cost-related information.
-
-The Rank Score is used to answer:
-
-> **If investigation resources are limited, which eligible alerts should be considered first?**
-
-It is **not a probability** and should not be interpreted as a percentage.
+> **Fraud Risk is a model probability. It is not an alert decision and it is not a Rank Score.**
 
 ---
 
-# Repeat-Alert Suppression
+## 4. Decision Policies
 
-The sequential evaluation includes repeat-alert suppression.
+### 4.1 Static Policy
 
-When multiple candidate alerts are associated with the same simulated entity within the configured suppression window, later alerts may be removed before analyst capacity is applied.
+The Static policy uses a fixed Fraud Risk threshold.
 
-Suppression is intended to reduce repeated investigation workload.
+```text
+Static Threshold = 0.50
+```
 
-It is not a separate fraud-classification model.
+Decision rule:
+
+```text
+Fraud Risk ≥ 0.50
+→ Static Candidate Alert
+```
+
+For the current 10,000-transaction evaluation:
+
+```text
+Static Candidate Alerts = 736
+```
 
 ---
 
-# Analyst Capacity
+### 4.2 Adaptive Policy — Eligibility
 
-Analyst capacity represents the maximum number of alerts that may enter investigation during each operational step.
+The Adaptive policy separates:
 
-For example:
+1. **Eligibility**
+2. **Operational Priority**
+3. **Alert Budget**
+
+Current eligibility rule:
 
 ```text
-Analyst capacity = 50 alerts per step
+Fraud Risk ≥ 0.30
+AND
+Expected Benefit > 0
 ```
 
-This constraint is separate from the Adaptive candidate budget.
+The `0.30` value is the Adaptive **minimum risk floor**.
 
-An Adaptive policy may therefore generate hundreds of candidate alerts while only the highest-priority subset can actually be investigated.
+It determines which transactions are eligible to compete for the Adaptive alert budget.
 
-Each candidate ends in one of three operational outcomes:
+---
 
-| Outcome | Meaning |
-| --- | --- |
-| **Investigated** | Alert entered the analyst investigation queue |
-| **Suppressed** | Alert was removed by repeat-alert suppression |
-| **Capacity rejected** | Alert remained eligible but available analyst capacity was exhausted |
+### 4.3 Adaptive Policy — Operational Priority
 
-The backend validates:
+For each eligible transaction:
 
 ```text
-Candidate alerts
+Expected Fraud Loss
 =
-Investigated alerts
-+
-Suppressed alerts
-+
-Capacity-rejected alerts
+Fraud Risk × Amount × False-Negative Factor
 ```
 
-Unused analyst capacity is not carried forward to later operational steps.
-
----
-
-# Sequential Evaluation
-
-The main operational evaluation is an **offline chronological replay**.
-
-Transactions are processed according to the PaySim `step` variable.
-
-Transactions sharing the same step are treated as one operational decision cycle.
-
-Within each step, the system performs:
-
-1. Fraud-risk scoring
-2. Candidate-alert generation
-3. Repeat-alert suppression
-4. Priority ranking
-5. Analyst-capacity enforcement
-6. Investigation-queue selection
-7. Retrospective comparison with PaySim fraud labels
-
-The sequential evaluation is **not a live event-processing system**.
-
-The correct description of the implementation is:
-
-> **Offline sequential simulation / chronological replay**
-
-Batch evaluation is retained as an ideal methodological reference before sequential operational constraints are applied.
-
----
-
-# Operational Step Explorer
-
-The Sequential Workflow includes an interactive **Operational Step Explorer**.
-
-Instead of displaying only aggregate results, the explorer allows the user to inspect what happened during individual chronological PaySim steps.
-
-The user can select an operational step and switch between:
-
 ```text
-Static
-Adaptive
-```
-
-For each step, the dashboard reports:
-
-- Transactions processed
-- Candidate alerts
-- Candidate-alert rate
-- Eligible alerts after suppression
-- Investigated alerts
-- Analyst capacity
-- Capacity-rejected alerts
-- Frauds present
-- Frauds detected
-- Fraud recall within the selected step
-
-This makes the sequential component explicitly temporal:
-
-```text
-How the decision system works
-        ↓
-What happened in Step 1
-        ↓
-What happened in Step 2
-        ↓
-...
-        ↓
-What happened in Step 7
-```
-
----
-
-## Interactive Adaptive Budget Analysis
-
-When the **Adaptive policy** is selected, the Operational Step Explorer also allows the Budget Multiplier to be changed interactively.
-
-For example:
-
-```text
-1.0×
-1.1×
-1.2×
-1.3×
-1.4×
-1.5×
-```
-
-Changing the multiplier recalculates the Adaptive scenario while leaving the main dashboard configuration unchanged.
-
-The explorer then exposes the numerical decision path behind the resulting candidate alerts.
-
-This includes:
-
-### Risk-zone composition
-
-The dashboard separates selected Adaptive candidates into:
-
-```text
-Fraud risk ≥ 0.50
-```
-
-and:
-
-```text
-Fraud risk 0.30–0.50
-```
-
-The second group represents candidate transactions that would fail the Static 0.50 threshold but remain eligible under the Adaptive policy.
-
-The explorer also reports:
-
-- Lowest selected fraud risk
-- Median selected fraud risk
-- Highest selected fraud risk
-
-### Ranking
-
-For selected Adaptive candidates, the explorer reports:
-
-- Highest selected Rank Score
-- Median selected Rank Score
-- Lowest selected Rank Score
-
-This makes the prioritisation stage visible rather than treating Adaptive selection as another simple threshold.
-
----
-
-## Global Multiplier vs Step-Local Effect
-
-An important distinction is made between the **configured global Budget Multiplier** and its **observed effect within an individual operational step**.
-
-For example:
-
-```text
-Configured Budget Multiplier = 1.4×
-```
-
-does not mean:
-
-```text
-Adaptive alerts in Step 1
+Expected Investigation Cost
 =
-Static alerts in Step 1 × 1.4
+(1 − Fraud Risk) × Investigation Cost
 ```
 
-The multiplier determines the **global Adaptive candidate budget**.
-
-Eligible transactions are ranked across the evaluation, and the selected transactions are subsequently observed within their chronological PaySim steps.
-
-Therefore, an individual step may show, for example:
+Then:
 
 ```text
-Static candidates = 294
-Adaptive candidates = 359
-
-359 / 294 = 1.22×
-```
-
-even though:
-
-```text
-Configured global multiplier = 1.4×
-```
-
-The **1.4×** is the configured global policy setting.
-
-The **1.22×** is the observed local expansion within that particular step.
-
-These are intentionally different quantities.
-
----
-
-# Operational Cost
-
-The project uses a simulation-based estimate of operational cost for comparing policies under identical assumptions.
-
-The current formulation is:
-
-```text
-Estimated operational cost
+Expected Benefit
 =
-Investigation cost
-+
-Estimated missed-fraud value
+Expected Fraud Loss − Expected Investigation Cost
 ```
 
-Investigation cost is calculated as:
+Under the current `risk_zone` policy:
 
 ```text
-Investigated alerts
-×
-Assumed investigation cost per alert
+Rank Score = Expected Benefit
 ```
 
-Missed-fraud value is derived from transaction amounts associated with fraud cases that were not detected, together with the configured false-negative cost factor.
+Eligible alerts are ordered from **highest to lowest Rank Score**.
 
-These values are experimental decision-support measures.
+> **Fraud Risk = estimated fraud probability.**  
+> **Rank Score = operational investigation priority.**
 
-They are **not observed banking losses or accounting figures**.
+There is no fixed rule such as:
 
----
+```text
+Rank Score ≥ 25
+```
 
-# Dashboard
-
-The Streamlit application is organised into five main analytical sections.
-
-## 1. Executive Summary
-
-The Executive Summary presents the primary Static-versus-Adaptive comparison.
-
-It reports:
-
-- Investigated alerts
-- Frauds detected
-- Frauds missed
-- Precision
-- Recall
-- Estimated operational cost
-- Cost difference
-- Policy interpretation
-
-A **Quick Guide** provides a short introduction for first-time users and directs them to the relevant dashboard sections.
-
-Sequential results are treated as the primary operational evidence.
+Instead, the effective cut-off emerges dynamically from the ordered alerts and the available Adaptive alert budget.
 
 ---
 
-## 2. Analyst Capacity
+### 4.4 Adaptive Policy — Budget Multiplier
 
-The Analyst Capacity section answers:
+The Budget Multiplier determines the maximum Adaptive alert budget relative to the Static candidate-alert volume.
 
-> **Which alerts were investigated or excluded, and why?**
+Example with `1.4×`:
 
-It includes:
+```text
+Static Candidate Alerts = 736
+Budget Multiplier       = 1.4×
 
-- Fraud Investigation Funnel
-- Candidate alerts
-- Investigated alerts
-- Suppressed alerts
-- Capacity-rejected alerts
-- Analyst capacity by operational step
-- Fraud risk by transaction type
-- Prioritised Investigation Queue
-- Transaction-level decision explanations
+736 × 1.4
+=
+1,030.4
 
-The investigation queue includes both investigated and non-investigated candidate alerts so that the operational cut-off can be inspected directly.
+Adaptive Alert Budget
+=
+1,030 alerts
+```
+
+The Budget Multiplier does **not** modify:
+
+- Fraud Risk
+- Transaction Amount
+- Rank Score
+- Analyst Capacity
+
+It determines how many of the highest-ranked eligible Adaptive alerts may be retained.
+
+### Adaptive Decision Flow
+
+```text
+Fraud Risk ≥ 0.30
+        ↓
+Expected Benefit > 0
+        ↓
+Rank Score Calculated
+        ↓
+Eligible Alerts Ordered by Rank Score
+        ↓
+Budget Multiplier Determines Alert Budget
+        ↓
+Highest-Ranked Alerts Retained
+```
 
 ---
 
-## 3. Sequential Workflow
+## 5. Sequential Operational Logic
 
-The Sequential Workflow answers:
+The main operational evaluation uses an **offline sequential simulation / chronological replay**.
 
-> **How did the decision process evolve over time?**
+Transactions are processed according to PaySim `step`.
 
-It includes:
+Transactions sharing the same `step` belong to the same operational decision cycle.
 
-- Seven-step decision process
-- Interactive Operational Step Explorer
-- Static/Adaptive policy selector
-- Interactive Adaptive Budget Multiplier
-- Step-level candidate and investigation metrics
-- Candidate priority breakdown
-- Expandable numerical explanations
-- Batch-versus-Sequential methodological comparison
-- Clarification of offline replay versus real-time processing
+### Seven-Step Decision Process
 
-This gives the Sequential Workflow a different purpose from the Analyst Capacity section:
+| Step | Input | Processing | Output |
+| ---: | --- | --- | --- |
+| **1** | Original PaySim fields | Transactions are replayed chronologically | Transaction ready for feature processing |
+| **2** | Original + engineered features | ML pipeline estimates Fraud Risk | `fraud_score` |
+| **3** | Fraud Risk + policy parameters | Static or Adaptive rules create candidate alerts | Candidate alerts |
+| **4** | Candidate alerts + simulated entity history | Repeated alerts may be suppressed | Eligible alerts |
+| **5** | Eligible alerts + Rank Score | Alerts are ordered by operational priority | Prioritised alerts |
+| **6** | Prioritised alerts + analyst capacity | Per-step capacity is applied | Investigated / Capacity-Rejected |
+| **7** | Decisions + `isFraud` | Decisions are evaluated retrospectively | Recall / Precision / Cost |
+
+### Repeat-Alert Suppression
+
+Repeated candidate alerts associated with the same simulated entity may be suppressed within the configured suppression window.
+
+```text
+Candidate Alert
+        ↓
+Repeat-Alert Check
+   ├── Repeated → Suppressed
+   └── Not Repeated → Continue
+```
+
+Suppression is an **operational rule**, not a fraud-classification model.
+
+### Analyst Capacity
+
+Example:
 
 ```text
 Analyst Capacity
-→ Which alerts were selected or excluded overall?
+=
+50 investigations per operational step
+```
 
-Sequential Workflow
-→ How did those decisions evolve step by step?
+Capacity is applied independently inside every operational step.
+
+Unused capacity is **not carried forward**.
+
+Sequential ranking follows:
+
+```text
+1. rank_score      → descending
+2. fraud_score     → descending
+3. transaction_id  → ascending
+```
+
+Candidate-alert accounting:
+
+```text
+Candidate Alerts
+=
+Investigated
++
+Suppressed
++
+Capacity-Rejected
 ```
 
 ---
 
-## 4. Monitoring
+# 6. Dashboard Structure
 
-The Monitoring section divides the replay into consecutive reporting windows.
-
-Monitoring windows are used for reporting and trend inspection.
-
-They are separate from operational steps and do not control analyst-capacity resets.
-
-The monitoring view reports:
-
-- Candidate alerts
-- Investigated alerts
-- Capacity overflow
-- Missed frauds
-- Recall
-- Estimated operational cost
-
-This represents **operational monitoring of the offline replay**.
-
-It is not an MLOps monitoring pipeline.
-
----
-
-## 5. Sensitivity Analysis
-
-Sensitivity analysis evaluates how the decision layer behaves when one operating parameter changes while the remaining settings are held constant.
-
-The current experiments include:
-
-| Parameter | Tested configuration |
-| --- | --- |
-| Transaction volume | Multiple evaluation sizes |
-| Analyst capacity | Multiple alerts-per-step settings |
-| Investigation cost | Multiple assumed cost values |
-| Suppression window | Multiple step-based settings |
-| Adaptive Budget Multiplier | Multiple multiplier settings |
-| Static threshold | Multiple fraud-risk thresholds |
-| Minimum Adaptive threshold | Multiple minimum fraud-risk thresholds |
-
-The experiments follow a **one-parameter-at-a-time** design.
-
-The Sensitivity Analysis allows the user to distinguish cases in which:
-
-- Adaptive is preferable
-- Static is preferable
-- The two policies produce effectively equivalent outcomes
-
-Preference is evaluated using fraud recall and estimated operational cost under the tested assumptions.
-
----
-
-# Current Example Configuration
-
-For the current 10,000-transaction sequential scenario with analyst capacity set to 50 alerts per operational step:
-
-| Metric | Static | Adaptive |
-| --- | ---: | ---: |
-| Investigated alerts | 313 | 349 |
-| Frauds detected | 27 | 30 |
-| Frauds missed | 41 | 38 |
-| Precision | 8.6% | 8.6% |
-| Recall | 39.7% | 44.1% |
-| Estimated operational cost | €1,745,391.01 | €1,726,843.29 |
-
-Under this configuration, the Adaptive policy produces:
+The Streamlit dashboard follows the current analytical sequence:
 
 ```text
-Recall:
+1. Executive Summary
+        ↓
+2. Sequential Workflow
+        ↓
+3. Analyst Capacity
+        ↓
+4. Monitoring
+        ↓
+5. Sensitivity Analysis
+```
+
+---
+
+## Slide 1 — Executive Summary
+
+**Purpose:** present the main Static-versus-Adaptive operational result.
+
+| Component | Representation |
+| --- | --- |
+| Recommended Policy | Current preferred decision policy |
+| Investigated Alerts | Alerts entering analyst investigation |
+| Frauds Detected | Fraudulent transactions successfully investigated |
+| Frauds Missed | Fraudulent transactions not investigated |
+| Precision | Fraud concentration among investigated alerts |
+| Recall | Share of total frauds detected |
+| Operational Cost | Simulation-based estimated policy cost |
+
+The **Sequential replay** is treated as the main operational evidence.
+
+Batch evaluation is retained only as an ideal methodological reference.
+
+---
+
+## Slide 2 — Sequential Workflow
+
+**Purpose:** show how operational decisions evolve chronologically.
+
+### Structure
+
+```text
+Seven-Step Decision Process
+        ↓
+Model Input Explanation
+        ↓
+Static / Adaptive Policy Selection
+        ↓
+Adaptive Budget Multiplier
+        ↓
+Operational Step Explorer
+        ↓
+Step-Level Alert Representation
+        ↓
+Eligibility + Rank Score Explanation
+        ↓
+Batch vs Sequential Reference
+        ↓
+Offline Replay Clarification
+```
+
+### Operational Step Explorer
+
+For each selected PaySim step:
+
+| Metric | Meaning |
+| --- | --- |
+| **Transactions Processed** | Transactions present in the selected step |
+| **Candidate Alerts** | Alerts generated by the selected policy |
+| **Suppressed** | Repeated alerts removed before capacity allocation |
+| **Investigated** | Alerts accepted within analyst capacity |
+| **Capacity-Rejected** | Eligible alerts excluded because capacity was exhausted |
+| **Frauds Detected** | Fraudulent transactions among investigated alerts |
+
+### Step-Level Alert Representation
+
+The explorer exposes alert-level information such as:
+
+```text
+Transaction ID
+Step
+Transaction Type
+Amount
+Fraud Risk
+Rank Score
+Priority
+Suppression Status
+Investigation Status
+Final Sequential Decision
+```
+
+This allows the user to inspect how a transaction moves from model prediction to operational outcome.
+
+---
+
+## Slide 3 — Analyst Capacity
+
+**Purpose:** show which candidate alerts were investigated or excluded and why.
+
+### Structure
+
+```text
+Fraud Investigation Funnel
+        ↓
+Candidate-Alert Accounting
+        ↓
+Analyst Capacity by Operational Step
+        ↓
+Fraud Risk by Transaction Type
+        ↓
+Prioritised Investigation Queue
+        ↓
+Alert Decision Explanation
+```
+
+### Final Alert Outcomes
+
+| Outcome | Meaning |
+| --- | --- |
+| **Investigated** | Alert entered analyst investigation |
+| **Suppressed** | Alert removed by repeat-alert suppression |
+| **Capacity-Rejected** | Alert remained eligible but analyst capacity was exhausted |
+
+### Investigation Funnel
+
+```text
+Transactions
+        ↓
+Candidate Alerts
+        ↓
+Suppression
+        ↓
+Prioritised Alerts
+        ↓
+Analyst Capacity
+        ↓
+Investigated Alerts
+```
+
+The Prioritised Investigation Queue contains both investigated and non-investigated candidates so the operational cut-off remains inspectable.
+
+---
+
+## Slide 4 — Monitoring
+
+**Purpose:** inspect how operational results change across the chronological replay.
+
+| Metric | Representation |
+| --- | --- |
+| Candidate Alerts | Policy-generated workload |
+| Investigated Alerts | Analyst workload |
+| Capacity Overflow | Alerts rejected because capacity was exhausted |
+| Frauds Missed | Fraudulent cases not investigated |
+| Recall | Fraud coverage |
+| Estimated Operational Cost | Simulation-based policy cost |
+
+Monitoring windows are **reporting units**.
+
+They are not PaySim operational steps and they do not control analyst-capacity resets.
+
+> Monitoring represents operational analysis of the offline replay, not a production MLOps monitoring pipeline.
+
+---
+
+## Slide 5 — Sensitivity Analysis
+
+**Purpose:** test how operational results change when one parameter changes while the others remain fixed.
+
+### Parameters Tested
+
+| Parameter | Values / Range |
+| --- | --- |
+| Transaction Volume | `1,000` · `3,000` · `10,000` |
+| Analyst Capacity | `10–100` alerts per step |
+| Investigation Cost | `€5` · `€10` · `€15` · `€20` · `€25` |
+| Suppression Window | `0` · `1` · `2` · `3` · `5` steps |
+| Adaptive Budget Multiplier | `1.0–2.0` |
+| Static Threshold | `0.30` · `0.40` · `0.50` · `0.60` · `0.70` |
+| Minimum Adaptive Threshold | `0.10` · `0.20` · `0.30` · `0.40` · `0.50` |
+
+### Sensitivity Workflow
+
+```text
+Decision Scenario Explorer
+        ↓
+Baseline Configuration
+        ↓
+Static vs Adaptive Comparison
+        ↓
+Experiment Drill-Down
+        ↓
+Recall Comparison
+        ↓
+Estimated Cost Comparison
+        ↓
+Policy Interpretation
+```
+
+The analysis uses a **one-parameter-at-a-time** design.
+
+---
+
+# 7. Current Baseline Results
+
+### Configuration
+
+```text
+Transactions Evaluated = 10,000
+Analyst Capacity       = 50 alerts / operational step
+Static Threshold       = 0.50
+Adaptive Risk Floor    = 0.30
+```
+
+### Static vs Adaptive
+
+| Metric | Static | Adaptive | Δ Adaptive vs Static |
+| --- | ---: | ---: | ---: |
+| **Investigated Alerts** | 313 | 349 | +36 |
+| **Frauds Detected** | 27 | 30 | +3 |
+| **Frauds Missed** | 41 | 38 | −3 |
+| **Precision** | 8.6% | 8.6% | ≈ 0 pp |
+| **Recall** | 39.7% | 44.1% | **+4.4 pp** |
+| **Estimated Operational Cost** | €1,745,391.01 | €1,726,843.29 | **−€18,547.72** |
+
+### Baseline Effect
+
+```text
+Recall
 39.7% → 44.1%
 
-Estimated operational cost:
+Frauds Detected
+27 → 30
+
+Frauds Missed
+41 → 38
+
+Estimated Operational Cost
 €1.745M → €1.727M
 ```
 
-The results demonstrate the operational trade-off produced by the decision layer under the selected simulation assumptions.
+Under the current configuration, Adaptive:
 
-These values are based on synthetic PaySim data and should **not** be generalised to real banking environments.
+```text
++3 detected frauds
++4.4 percentage points recall
+−3 missed frauds
+≈ €18.5K lower estimated operational cost
+```
 
----
-
-# Example Capacity Scenario
-
-The Decision Scenario Explorer can also be used to examine the effect of analyst capacity.
-
-For example, increasing Adaptive capacity from **50 to 60 alerts per operational step** produced:
-
-| Outcome | 50 per step | 60 per step |
-| --- | ---: | ---: |
-| Candidate alerts | 1,020 | 1,020 |
-| Investigated alerts | 349 | 402 |
-| Frauds detected | 30 | 32 |
-| Recall | 44.1% | 47.1% |
-| Suppressed alerts | 21 | 26 |
-| Capacity-rejected alerts | 650 | 592 |
-
-This illustrates an important distinction:
-
-> Increasing analyst capacity does not necessarily generate more candidate alerts. It determines how many existing candidates can actually enter investigation.
+> These are simulation-based results using synthetic PaySim data, not observed banking outcomes.
 
 ---
 
-# Technology Stack
+## 8. Example Capacity Scenario
+
+Increasing Adaptive analyst capacity:
+
+```text
+50 → 60 alerts per operational step
+```
+
+produces:
+
+| Outcome | Capacity 50 | Capacity 60 | Change |
+| --- | ---: | ---: | ---: |
+| Candidate Alerts | 1,020 | 1,020 | 0 |
+| Investigated Alerts | 349 | 402 | +53 |
+| Frauds Detected | 30 | 32 | +2 |
+| Recall | 44.1% | 47.1% | +3.0 pp |
+| Suppressed Alerts | 21 | 26 | +5 |
+| Capacity-Rejected Alerts | 650 | 592 | −58 |
+
+This illustrates the separation between:
+
+```text
+Candidate Generation
+≠
+Analyst Capacity
+```
+
+Candidate volume remains unchanged while investigation coverage increases.
+
+---
+
+## 9. Operational Cost Representation
+
+```text
+Estimated Operational Cost
+=
+Investigation Cost
++
+Estimated Missed-Fraud Value
+```
+
+Investigation component:
+
+```text
+Investigation Cost
+=
+Investigated Alerts
+×
+Assumed Cost per Investigation
+```
+
+The cost values are **experimental policy-comparison measures**.
+
+They are not observed financial losses.
+
+---
+
+## 10. Technology Stack
 
 | Area | Technology |
 | --- | --- |
-| Programming language | Python |
-| Data processing | Pandas, NumPy |
-| Machine learning | scikit-learn |
+| Programming Language | Python |
+| Data Processing | Pandas, NumPy |
+| Machine Learning | scikit-learn |
 | API | FastAPI |
 | Dashboard | Streamlit |
-| Visualisation | Matplotlib, Streamlit charts |
-| Model persistence | Joblib / persisted model artifacts |
-| Version control | Git, GitHub |
+| Visualisation | Matplotlib, Streamlit |
+| Testing | pytest |
+| Version Control | Git, GitHub |
 
 ---
 
-# Application Structure
-
-The project is organised around separate modelling, API, decision, simulation, and dashboard components.
+## 11. Repository Structure
 
 ```text
 app/
@@ -737,22 +699,91 @@ tests/
 
 ---
 
-# API
+## 12. API Role
 
-The Streamlit dashboard obtains simulation results from the FastAPI backend.
+The FastAPI backend connects the ML and decision layers with the Streamlit interface.
 
-The dashboard uses API functionality for:
+It supports:
 
-- Sequential policy evaluation
-- Static-versus-Adaptive comparison
-- Transaction-level decision outputs
-- Operational-step outputs
-- Sensitivity analysis
-- Alternative Adaptive Budget Multiplier scenarios
+- policy comparison
+- sequential simulation
+- transaction-level decision outputs
+- operational-step results
+- Budget Multiplier scenarios
+- sensitivity analysis
 
-The API base URL is configured through the `API_BASE_URL` environment variable.
+---
 
-When no environment variable is provided, local development uses:
+## 13. Testing
+
+Current automated regression suite:
+
+```text
+88 tests passed
+```
+
+| Test Area | Tests | Result |
+| --- | ---: | --- |
+| Decision Logic | 16 | 16 passed |
+| Analyst Queue and Capacity | 10 | 10 passed |
+| Sequential Simulation | 12 | 12 passed |
+| Operating-Curve Logic | 19 | 19 passed |
+| REST API | 14 | 14 passed |
+| Dashboard Logic | 17 | 17 passed |
+| **Total** | **88** | **88 passed** |
+
+Key checks include:
+
+- Static and Adaptive decision logic
+- Rank Score calculations
+- Expected Benefit calculations
+- risk-zone constraints
+- Budget Multiplier behaviour
+- chronological processing
+- repeat-alert suppression
+- analyst-capacity enforcement
+- candidate-alert accounting
+- API outputs
+- dashboard transformations
+
+---
+
+## 14. Run Locally
+
+### Create Environment
+
+```bash
+py -m venv .venv
+.venv\Scripts\activate
+```
+
+### Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### Dataset
+
+Place PaySim at:
+
+```text
+data/raw/AIML Dataset.csv
+```
+
+### Start FastAPI
+
+```bash
+py -m uvicorn app.api.main:app --reload --port 8002
+```
+
+### Start Streamlit
+
+```bash
+py -m streamlit run app/streamlit_app.py
+```
+
+Default local API:
 
 ```text
 http://127.0.0.1:8002
@@ -760,197 +791,39 @@ http://127.0.0.1:8002
 
 ---
 
-# Running Locally
+## 15. Limitations
 
-## 1. Create and Activate a Virtual Environment
+- Synthetic PaySim transactions
+- Offline chronological replay rather than live streaming
+- Fixed per-step analyst-capacity abstraction
+- Simulation-based cost assumptions
+- Retrospective `isFraud` labels for evaluation
+- Synthetic entity identities for suppression logic
 
-### Windows
+---
 
-```bash
-py -m venv .venv
-.venv\Scripts\activate
-```
-
-### macOS / Linux
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-## 2. Install Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-## 3. Add the PaySim Dataset
-
-Place the dataset at:
+## 16. Core Research Contribution
 
 ```text
-data/raw/AIML Dataset.csv
+Transaction Columns
+        ↓
+Engineered Features
+        ↓
+Fraud Risk
+        ↓
+Alert Eligibility
+        ↓
+Rank Score
+        ↓
+Adaptive Alert Budget
+        ↓
+Repeat-Alert Suppression
+        ↓
+Analyst Capacity
+        ↓
+Investigation
+        ↓
+Operational Outcome
 ```
 
-## 4. Start the FastAPI Backend
-
-```bash
-py -m uvicorn app.api.main:app --reload --port 8002
-```
-
-## 5. Start the Streamlit Application
-
-```bash
-py -m streamlit run app/streamlit_app.py
-```
-
-The Streamlit application and FastAPI backend must use the same API configuration.
-
----
-
-# Deployment
-
-The Streamlit interface is publicly deployed as a research demonstration.
-
-Deployment makes the dashboard accessible through a browser but does not change the underlying evaluation method.
-
-The application still uses:
-
-- synthetic PaySim data;
-- stored transactions;
-- offline chronological replay;
-- simulated analyst capacity;
-- retrospective fraud labels.
-
-Deployment should therefore not be interpreted as evidence of:
-
-- production banking integration;
-- live payment validation;
-- live fraud operations;
-- or real-time transaction streaming.
-
----
-
-# Testing
-
-The repository includes an automated `pytest` test suite covering the main decision-support, sequential-processing, API, and dashboard-logic components of the prototype.
-
-The regression suite contains **88 automated tests**.
-
-Testing covers:
-
-- Static and Adaptive decision logic
-- Score-, benefit-, hybrid-, and risk-zone ranking
-- Expected fraud-loss calculations
-- Investigation-cost calculations
-- Expected-benefit calculations
-- Risk-zone constraints
-- Alert-budget constraints
-- Invalid-parameter handling
-- Analyst-capacity enforcement
-- Prioritised investigation-queue ordering
-- Chronological sequential processing
-- Repeat-alert suppression
-- Capacity-rejected alerts
-- Sequential accounting consistency
-- Operating-curve behaviour
-- Budget Multiplier behaviour
-- REST API responses
-- Sequential API scenarios
-- Dashboard monitoring transformations
-- Dashboard trend-classification logic
-
-The complete test suite can be executed with:
-
-```bash
-py -m pytest app/tests -q
-```
-
-Latest full regression run:
-
-```text
-88 passed
-```
-
-These tests verify implementation consistency within the research prototype.
-
-They do not constitute evidence of production readiness or external validity on real banking data.
-
----
-
-# Limitations
-
-## Synthetic Data
-
-The evaluation uses PaySim rather than institution-specific banking data.
-
-The results demonstrate behaviour within the experimental framework and do not establish external validity on real financial transactions.
-
-## Offline Replay
-
-The Sequential Workflow uses stored transactions processed in chronological order.
-
-It does not receive continuously arriving payment events.
-
-## Simplified Analyst Capacity
-
-Analyst capacity is represented as a fixed number of alerts per operational step.
-
-Real investigation capacity would also depend on staffing, case complexity, working hours, investigation duration, and organisational processes.
-
-## Retrospective Labels
-
-Ground-truth fraud labels are available for evaluation after the simulated decision has been made.
-
-In a production environment, confirmed fraud outcomes would usually arrive with delay.
-
-## Experimental Cost Assumptions
-
-Investigation cost and missed-fraud value are simulation assumptions.
-
-They are used to compare decision policies under identical conditions and should not be interpreted as observed financial losses.
-
-## Synthetic Identity and Suppression Logic
-
-Repeat-alert suppression operates on simulated identifiers available within the research framework.
-
-The implementation should not be interpreted as modelling a real institution's customer-resolution or case-management process.
-
----
-
-# Future Work
-
-Potential extensions include:
-
-- Evaluation with appropriately governed real transaction data
-- Integration with a live transaction stream
-- Explicit mapping between PaySim steps and real operational time
-- Delayed analyst-feedback integration
-- Monitoring for changes in transaction and fraud patterns
-- More realistic analyst-capacity models
-- Richer false-positive and missed-fraud cost models
-- Comparison of additional alert-ranking strategies
-- Dynamic budget allocation across operational periods
-- Evaluation of alternative adaptive thresholding strategies
-- Integration with case-management workflows
-
----
-
-# Research Context
-
-This repository was developed as part of a **Master's thesis** investigating how fraud-risk predictions can support operational decisions when investigation resources are limited.
-
-The main contribution is not the fraud classifier alone.
-
-Instead, the project evaluates how machine-learning predictions can be translated into operational investigation decisions through a configurable decision layer supporting:
-
-- alert selection;
-- cost-aware prioritisation;
-- repeat-alert suppression;
-- analyst-capacity constraints;
-- chronological sequential evaluation;
-- operational monitoring;
-- sensitivity analysis;
-- and transaction-level decision explanations.
-
-The framework is intended as a **decision-support research prototype**, not as a production fraud platform.
+The central contribution is the **decision layer that translates ML fraud scores into explainable, prioritised and capacity-constrained investigation decisions**, rather than the fraud classifier alone.
