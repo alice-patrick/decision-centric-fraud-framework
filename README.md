@@ -8,6 +8,43 @@ A research prototype that turns fraud-risk predictions into **prioritised invest
 
 > **Research scope:** Synthetic PaySim transactions, offline chronological replay and hypothetical operational costs. This is **not** a live bank-fraud monitoring system. The previously hosted demonstration is currently offline; screenshots and local run instructions are available below.
 
+## Dataset & Research Objective
+
+### Data Source
+
+This research uses the **PaySim Synthetic Financial Dataset**, available through [Kaggle](https://www.kaggle.com/datasets/ealaxi/paysim1/data).
+
+PaySim simulates mobile money transactions and incorporates labelled fraudulent behaviour. It provides a controlled environment for evaluating fraud detection and investigation strategies without requiring access to confidential banking records.
+
+The framework uses transaction features and synthetic fraud labels to evaluate predictive performance and subsequent investigation decisions.
+
+### Research Objective
+
+The research addresses a practical limitation of fraud detection systems: **identifying high-risk transactions does not automatically determine which transactions should be investigated when analyst capacity is limited**.
+
+The objective is to develop and evaluate a decision-centric framework that connects fraud-risk predictions with operational investigation choices.
+
+The framework aims to:
+
+- Generate calibrated transaction-level fraud-risk estimates.
+- Compare Static and Adaptive investigation-selection strategies.
+- Evaluate how limited analyst capacity affects investigation outcomes.
+- Incorporate repeat-alert suppression and cost-aware prioritisation.
+- Measure trade-offs using fraud detection, recall, investigation workload and simulated operational costs.
+- Examine how strategy performance changes under alternative operating assumptions.
+
+### Why a Decision-Centric Approach?
+
+Traditional classification metrics assess how well a model distinguishes fraudulent from legitimate transactions, but they do not fully capture the consequences of operational decisions.
+
+A fraud detection system may identify more suspicious transactions than analysts can investigate.
+
+This research therefore evaluates not only **which transactions receive high-risk scores**, but also **which investigations are selected, what is missed, and the estimated consequences of those decisions**.
+
+The contribution lies in connecting Machine Learning predictions with capacity-aware decision policies and simulation-based operational evaluation.
+
+All findings are based on synthetic transactions and offline simulation, not live banking operations or realised financial savings.
+
 ## Results at a glance
 
 Results for one **10,000-transaction sequential simulation**:
